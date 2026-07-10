@@ -1,0 +1,100 @@
+{
+  "theme": "dark",
+  "archetype": "SWISS & HIGH-CONTRAST (Dark Mode Variant)",
+  "typography": {
+    "headings": "Cabinet Grotesk",
+    "body": "IBM Plex Sans",
+    "mono": "JetBrains Mono",
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl tracking-tight font-light",
+      "h2": "text-2xl sm:text-3xl tracking-tight",
+      "h3": "text-xl sm:text-2xl",
+      "h4": "text-lg sm:text-xl",
+      "body": "text-base leading-relaxed",
+      "small_labels": "text-xs uppercase tracking-[0.2em]"
+    }
+  },
+  "colors": {
+    "background": "#05050A",
+    "surface": "#12121A",
+    "surface_glass": "bg-black/60 backdrop-blur-xl border border-white/10",
+    "text_primary": "#FFFFFF",
+    "text_secondary": "#A1A1AA",
+    "accent_primary": "#FFFFFF",
+    "accent_ai": "#00E5FF",
+    "warning": "#FFD600",
+    "border": "#27272A"
+  },
+  "visual_enhancers": {
+    "shadows": "Ambient diffused shadows shadow-[0_8px_32px_rgba(0,0,0,0.4)] for floating bars",
+    "borders": "1px solid border-white/10 for glass, border-white/5 for solid cards",
+    "textures": "Subtle noise overlay on the dashboard background to remove digital flatness"
+  },
+  "components": {
+    "floating_command_bar": "Glassmorphism surface, rounded-full or rounded-xl, 1px inner border, highly responsive, placed at bottom center or attached to selection region.",
+    "selection_canvas": "Semi-transparent dark overlay with a clear 'cutout' for the selected region. 1px solid accent color border with corner handles.",
+    "dashboard_cards": "Flat background (surface), 1px subtle border, no shadow by default. Hover adds slight lift and border lightening.",
+    "action_buttons": "Pill-shaped or slightly rounded, high contrast (white bg, black text for primary).",
+    "toast": "Use sonner for capture success/failure notifications, bottom-right placement."
+  },
+  "grids_and_layouts": {
+    "dashboard": "High Density Grid (Mode B). grid-cols-1 md:grid-cols-3 lg:grid-cols-4. gap-4 or gap-6. Use for recent captures history.",
+    "floating_overlay": "Absolute positioned elements over a full-screen transparent canvas (pointer-events-none where not interactive)."
+  },
+  "motion": {
+    "hover": "Subtle border color transitions, slight scaling (scale-105) on interactive icons.",
+    "entrance": "Command bar slides up from bottom or expands from a point. Framer motion for layout animations.",
+    "ai_processing": "Shimmering gradient border (Tracing Beam) on the command bar or selection edge while AI is analyzing the capture."
+  },
+  "accessibility": {
+    "contrast": "Ensure all text meets minimum 4.5:1 ratio against #05050A.",
+    "focus": "focus:ring-2 focus:ring-white/50 focus:outline-none",
+    "reduced_motion": "Respect prefers-reduced-motion for the tracing beam and slide animations.",
+    "test_ids": "Include data-testid on all interactive elements (e.g., command-bar-input, capture-region-box)."
+  },
+  "media": {
+    "icons": "@phosphor-icons/react for precision, technical feel.",
+    "image_urls": {
+      "dashboard_empty_state": {
+        "url": "https://images.unsplash.com/photo-1719400471588-575b23e27bd7?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxNzV8MHwxfHNlYXJjaHwxfHxkZXZlbG9wZXIlMjB3b3JraW5nJTIwb24lMjBtdWx0aXBsZSUyMG1vbml0b3JzJTIwZGFyayUyMHJvb218ZW58MHx8fHwxNzgzNjc3ODUwfDA&ixlib=rb-4.1.0&q=85",
+        "description": "Developer working in a dark room with multiple monitors, representing the target user."
+      },
+      "ai_processing_bg": {
+        "url": "https://images.unsplash.com/photo-1644088379091-d574269d422f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzOTB8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMHRlY2hub2xvZ3klMjBhaSUyMG5vZGVzJTIwY29ubmVjdGlvbnxlbnwwfHx8fDE3ODM2Nzc4NTB8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Abstract technology lines representing AI connections."
+      },
+      "user_avatar": {
+        "url": "https://images.unsplash.com/photo-1740252117027-4275d3f84385?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODd8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBhdmF0YXIlMjB1c2VyJTIwcHJvZmlsZXxlbnwwfHx8fDE3ODM2Nzc4NTF8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Professional user avatar for settings/profile."
+      }
+    }
+  },
+  "3d_libraries": {
+    "strategy": "Not recommended for the core extension overlay to maintain extreme performance and low latency. Might use light TSParticles for the dashboard hero if needed, but prioritize 2D DOM for speed."
+  },
+  "instructions_to_main_agent": [
+    "Build a pure React/Tailwind frontend, no actual heavy OS native code needed, use a full-screen web overlay to mock the Windows desktop scaffold.",
+    "Use @phosphor-icons/react for all icons.",
+    "Do NOT use HTML <select> or <input type='date'>. Use Shadcn components for all forms.",
+    "Ensure 'Inter' is not used for headings.",
+    "Make the Command Bar highly interactive with hover states and a polished glassmorphic background.",
+    "Implement the 'Tracing Beam' effect on the boundary of the selected region when AI is 'processing' it.",
+    "Do not use generic gray text-on-gray backgrounds. Always ensure crisp contrast.",
+    "Create a clean separation between the 'Capture Overlay Mode' (transparent background with crosshairs/selection) and the 'Dashboard Mode' (dense bento grid).",
+    "Use the provided image URLs for avatars and placeholder backgrounds where appropriate."
+  ],
+  "universal_guidelines_for_main_agent": [
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur).",
+    "You MUST NOT apply universal transition (e.g. transition: all).",
+    "You MUST NOT center align the app container (.App { text-align: center; }).",
+    "Always use modern button styles (pill-shaped or sharp) with interaction animations.",
+    "NEVER use AI assistant Emoji characters for icons.",
+    "Every interaction needs micro-animations - hover states, transitions, etc.",
+    "Use 2-3x more spacing than feels comfortable.",
+    "Prioritize using pre-existing components from src/components/ui when applicable.",
+    "Use sonner for toasts.",
+    "Include data-testid on interactive elements."
+  ]
+}
