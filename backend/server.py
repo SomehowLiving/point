@@ -6,6 +6,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 import base64
+import io
 import json
 import re
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import List, Literal, Optional
 import uuid
 from datetime import datetime, timezone
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent, TextDelta, StreamDone
+from PIL import Image
 from ocr_service import extract_ocr
 from export_service import render_export
 
@@ -140,6 +142,21 @@ def parse_image_data(image_data: str) -> bytes:
     return raw
 
 
+def canonical_image_base64(raw: bytes) -> str:
+    try:
+        image = Image.open(io.BytesIO(raw))
+        image.load()
+        if image.mode not in {"RGB", "RGBA"}:
+            image = image.convert("RGBA" if "transparency" in image.info else "RGB")
+        if max(image.size) > 4096:
+            image.thumbnail((4096, 4096), Image.Resampling.LANCZOS)
+        output = io.BytesIO()
+        image.save(output, format="PNG", optimize=True)
+        return base64.b64encode(output.getvalue()).decode("ascii")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Image bytes could not be decoded") from exc
+
+
 def build_prompt(request: AnalyzeRequest) -> str:
     action_guides = {
         "copy": "Recover the requested text precisely, preserving layout. Return only copy-ready content.",
@@ -222,14 +239,14 @@ async def export_render(request: ExportRequest):
 
 @api_router.post("/captures/analyze")
 async def analyze_capture(request: AnalyzeRequest):
-    parse_image_data(request.image_data)
+    raw_image = parse_image_data(request.image_data)
     api_key = os.environ.get("EMERGENT_LLM_KEY")
     if not api_key:
         raise HTTPException(status_code=503, detail="AI service is not configured")
 
     provider, model_name = SUPPORTED_MODELS[request.model]
     session_id = str(uuid.uuid4())
-    image_payload = re.sub(r"^data:image\/(png|jpeg|jpg|webp);base64,", "", request.image_data, flags=re.I)
+    image_payload = canonical_image_base64(raw_image)
 
     async def event_stream():
         collected = []

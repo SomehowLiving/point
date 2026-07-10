@@ -1,10 +1,13 @@
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 export async function analyzeCapture(payload, onDelta) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 150000);
   const response = await fetch(`${API}/captures/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    signal: controller.signal,
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
@@ -14,22 +17,32 @@ export async function analyzeCapture(payload, onDelta) {
   const decoder = new TextDecoder();
   let buffer = "";
   let completed = null;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const events = buffer.split("\n\n");
-    buffer = events.pop() || "";
-    for (const raw of events) {
+  const consume = (raw) => {
       const line = raw.split("\n").find((item) => item.startsWith("data: "));
-      if (!line) continue;
+      if (!line) return;
       const event = JSON.parse(line.slice(6));
       if (event.type === "delta") onDelta(event.content);
       if (event.type === "done") completed = event;
       if (event.type === "error") throw new Error(event.message);
+  };
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split("\n\n");
+      buffer = events.pop() || "";
+      for (const raw of events) consume(raw);
     }
+    if (buffer.trim()) consume(buffer);
+    if (!completed) throw new Error("Analysis stream ended before completion. Please retry or switch models.");
+    return completed;
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error("Analysis timed out. Please retry or switch models.");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  return completed;
 }
 
 export async function getCaptures(search = "") {

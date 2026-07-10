@@ -50,6 +50,20 @@ The initial product should validate a Windows desktop application and Chrome ext
 
 ## Implemented
 
+### 2026-07-10 — Native Packaging, Extension Validation, and Deterministic OCR
+
+- Upgraded the Tauri shell from scaffold to native Windows capture source with active-monitor and stitched all-monitor capture, explicit hide/capture/show behavior, source display metadata, clipboard plugin, and `Alt+Shift+S` capture.
+- Configured both NSIS `.exe` and WiX `.msi` installers, generated Windows icon assets, added a local PowerShell packaging script, and added a Windows CI artifact workflow.
+- Cross-checked the Rust source against `x86_64-pc-windows-msvc`; formatting and target compilation pass.
+- Upgraded the Manifest V3 extension with DOM/page enrichment, capture status diagnostics, and a repeatable real-Chrome validation harness.
+- Validated unpacked extension capture and enrichment on GitHub, Wikipedia, Amazon, Stack Overflow, Vercel, Grafana, and Three.js; all seven sites passed.
+- Added deterministic Tesseract OCR with text, line structure, confidence, word boxes, image dimensions, and region-only extraction.
+- Added PaddleOCR as an isolated worker fallback so provider/runtime crashes cannot terminate the API; the current ARM host safely falls back to Tesseract.
+- Added plain-text, Markdown, JSON, and CSV exports with copy and file download controls.
+- Added canonical PNG normalization for reliable GPT-5.5 image analysis and explicit stream timeout/completion errors.
+- Added graceful browser clipboard fallback and permission-error toasts.
+- Expanded backend regression coverage to 19 passing tests.
+
 ### 2026-07-10 — Initial MVP
 
 - Built the full capture workspace with upload, paste, drag/drop, rectangular multi-region selection, freehand drawing, redaction, quick actions, model selection, and context-bundle summary.
@@ -67,9 +81,9 @@ The initial product should validate a Windows desktop application and Chrome ext
 
 ### P0 — Next Validation Work
 
-- Package and run the Tauri shell on Windows with native monitor capture and coordinate mapping.
-- Load the Chrome extension unpacked and validate handoff against several real websites and browser security restrictions.
-- Add automatic OCR text fields to the stored context bundle, not only model-generated extraction.
+- Run the generated NSIS/MSI packages on physical Windows 10 and Windows 11 machines and sign the installers.
+- Validate mixed-DPI monitor stitching and cursor-to-display mapping on a physical multi-monitor Windows setup.
+- Install and benchmark PaddleOCR on an x86_64 Windows or Linux runtime where its native backend is supported.
 
 ### P1 — Product Depth
 

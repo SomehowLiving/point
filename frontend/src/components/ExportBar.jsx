@@ -7,7 +7,7 @@ const formats = ["text", "markdown", "json", "csv"];
 
 export const ExportBar = ({ payload, source }) => {
   const create = async (format) => renderExport({ format, title: "Spatial AI OCR export", source, payload });
-  const copy = async (format) => { const file = await create(format); await writeClipboard(file.content); toast.success(`${format.toUpperCase()} copied`); };
+  const copy = async (format) => { try { const file = await create(format); await writeClipboard(file.content); toast.success(`${format.toUpperCase()} copied`); } catch (error) { toast.error(error.message || "Clipboard access was denied. Download the file instead."); } };
   const download = async (format) => {
     const file = await create(format); const url = URL.createObjectURL(new Blob([file.content], { type: file.mime_type }));
     const anchor = document.createElement("a"); anchor.href = url; anchor.download = file.filename; anchor.click(); URL.revokeObjectURL(url); toast.success(`${file.filename} downloaded`);

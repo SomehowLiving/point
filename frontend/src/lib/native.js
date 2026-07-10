@@ -17,5 +17,19 @@ export async function writeClipboard(text) {
     const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
     return writeText(text);
   }
-  return navigator.clipboard.writeText(text);
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
+    return await navigator.clipboard.writeText(text);
+  } catch (error) {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    if (!copied) throw new Error("Clipboard permission was denied. Use the download button instead.");
+  }
 }
