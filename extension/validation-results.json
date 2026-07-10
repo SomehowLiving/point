@@ -1,0 +1,83 @@
+{
+  "created_at": "2026-07-10T11:01:22.272Z",
+  "browser": "Google Chrome",
+  "sites": [
+    {
+      "name": "github",
+      "url": "https://github.com/tauri-apps/tauri",
+      "title": "GitHub - tauri-apps/tauri: Build smaller, faster, and more secure desktop and mobile applications with a web frontend. · GitHub",
+      "ok": true,
+      "screenshot_bytes": 226142,
+      "enriched": true,
+      "page_context_bytes": 10811,
+      "duration_ms": 3642,
+      "error": ""
+    },
+    {
+      "name": "wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Optical_character_recognition",
+      "title": "Optical character recognition - Wikipedia",
+      "ok": true,
+      "screenshot_bytes": 346166,
+      "enriched": true,
+      "page_context_bytes": 19616,
+      "duration_ms": 2387,
+      "error": ""
+    },
+    {
+      "name": "amazon",
+      "url": "https://www.amazon.com/",
+      "title": "Amazon.com",
+      "ok": true,
+      "screenshot_bytes": 31566,
+      "enriched": true,
+      "page_context_bytes": 616,
+      "duration_ms": 2074,
+      "error": ""
+    },
+    {
+      "name": "stackoverflow",
+      "url": "https://stackoverflow.com/questions/tagged/python",
+      "title": "Newest 'python' Questions - Stack Overflow",
+      "ok": true,
+      "screenshot_bytes": 298678,
+      "enriched": true,
+      "page_context_bytes": 20333,
+      "duration_ms": 3105,
+      "error": ""
+    },
+    {
+      "name": "vercel",
+      "url": "https://vercel.com/",
+      "title": "Agentic Infrastructure - Vercel",
+      "ok": true,
+      "screenshot_bytes": 66814,
+      "enriched": true,
+      "page_context_bytes": 4204,
+      "duration_ms": 2359,
+      "error": ""
+    },
+    {
+      "name": "grafana",
+      "url": "https://play.grafana.org/",
+      "title": "Dashboards - Grafana",
+      "ok": true,
+      "screenshot_bytes": 14982,
+      "enriched": true,
+      "page_context_bytes": 446,
+      "duration_ms": 2594,
+      "error": ""
+    },
+    {
+      "name": "threejs",
+      "url": "https://threejs.org/examples/",
+      "title": "three.js examples",
+      "ok": true,
+      "screenshot_bytes": 160826,
+      "enriched": true,
+      "page_context_bytes": 21186,
+      "duration_ms": 2199,
+      "error": ""
+    }
+  ]
+}

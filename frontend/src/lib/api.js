@@ -43,3 +43,15 @@ export async function deleteCapture(id) {
   const response = await fetch(`${API}/captures/${id}`, { method: "DELETE" });
   if (!response.ok) throw new Error("Capture could not be deleted");
 }
+
+export async function extractOcr(payload) {
+  const response = await fetch(`${API}/ocr/extract`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.detail || "OCR failed"); }
+  return response.json();
+}
+
+export async function renderExport(payload) {
+  const response = await fetch(`${API}/exports/render`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.detail || "Export failed"); }
+  return response.json();
+}

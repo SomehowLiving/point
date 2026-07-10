@@ -1,0 +1,13 @@
+/app/desktop/src-tauri/target/x86_64-pc-windows-msvc/debug/deps/libc-1468d7bdc56cfc63.d: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/macros.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/new/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/new/common/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/new/ucrt/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/primitives.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/windows/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/windows/msvc/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/types.rs
+
+/app/desktop/src-tauri/target/x86_64-pc-windows-msvc/debug/deps/liblibc-1468d7bdc56cfc63.rmeta: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/macros.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/new/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/new/common/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/new/ucrt/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/primitives.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/windows/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/windows/msvc/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/types.rs
+
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/lib.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/macros.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/new/mod.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/new/common/mod.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/new/ucrt/mod.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/primitives.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/windows/mod.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/windows/msvc/mod.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/types.rs:

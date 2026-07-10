@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle, Clipboard, Cursor, EyeSlash, PencilSimple, ShieldCheck, Trash, UploadSimple } from "@phosphor-icons/react";
+import { CheckCircle, Clipboard, Cursor, Desktop, EyeSlash, Monitor, PencilSimple, Scan, ShieldCheck, Trash, UploadSimple } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import { CaptureCanvas } from "@/components/CaptureCanvas";
 import { CommandBar } from "@/components/CommandBar";
-import { analyzeCapture } from "@/lib/api";
+import { analyzeCapture, extractOcr } from "@/lib/api";
+import { captureNative, isNativeShell, listenForNativeCapture, writeClipboard } from "@/lib/native";
+import { ExportBar } from "@/components/ExportBar";
 import { Switch } from "@/components/ui/switch";
 
 const accepted = ["image/png", "image/jpeg", "image/webp"];
@@ -35,12 +37,13 @@ export default function CapturePage() {
   const [command, setCommand] = useState("Explain what matters in this selection"); const [model, setModel] = useState("gpt-5.5");
   const [privateMode, setPrivateMode] = useState(false); const [processing, setProcessing] = useState(false); const [result, setResult] = useState("");
   const [source, setSource] = useState({ application:"Web dashboard", window_title:document.title, url:window.location.href });
+  const [ocr, setOcr] = useState(null); const [ocrLoading, setOcrLoading] = useState(false); const nativeShell = isNativeShell();
   const fileRef = useRef(null);
   const loadFile = useCallback((file) => {
     if (!file || !accepted.includes(file.type)) return toast.error("Use a PNG, JPEG, or WEBP image");
     if (file.size > 8 * 1024 * 1024) return toast.error("Image must be smaller than 8 MB");
     const reader = new FileReader();
-    reader.onload = () => { setImage(reader.result); setMimeType(file.type); setRegions([]); setAnnotations([]); setResult(""); };
+    reader.onload = () => { setImage(reader.result); setMimeType(file.type); setRegions([]); setAnnotations([]); setResult(""); setOcr(null); };
     reader.readAsDataURL(file);
   }, []);
   useEffect(() => {
@@ -58,22 +61,32 @@ export default function CapturePage() {
     window.addEventListener("message", receiveExtensionCapture);
     return () => window.removeEventListener("message", receiveExtensionCapture);
   }, [source]);
+  useEffect(() => {
+    let stop = () => {};
+    listenForNativeCapture((payload) => { setImage(payload.screenshot);setMimeType(payload.mime_type||"image/png");setSource(payload.source);setRegions([]);setAnnotations([]);setResult("");setOcr(null);toast.success("Windows display captured"); }).then((unlisten)=>{stop=unlisten;});
+    return () => stop();
+  }, []);
+  const runNativeCapture = async (mode) => { try { const payload=await captureNative(mode);setImage(payload.screenshot);setMimeType(payload.mime_type);setSource(payload.source);setRegions([]);setAnnotations([]);setResult("");setOcr(null);toast.success(mode==="all"?"All displays captured":"Active display captured"); } catch(error){toast.error(error.message);} };
+  const runOcr = async () => {
+    if(!image)return toast.error("Add a screenshot first");setOcrLoading(true);
+    try{const protectedImage=await applyRedactions(image,mimeType,annotations);const data=await extractOcr({image_data:protectedImage,mime_type:mimeType,engine:"auto",language:"eng",regions});setOcr(data);toast.success(`OCR complete · ${data.engine}`);}catch(error){toast.error(error.message);}finally{setOcrLoading(false);}
+  };
   const runAnalysis = async () => {
     if (!image) return toast.error("Add a screenshot first");
     if (!command.trim()) return toast.error("Give Spatial AI an instruction");
     setProcessing(true); setResult("");
     try {
       const protectedImage = await applyRedactions(image, mimeType, annotations);
-      const completed = await analyzeCapture({ image_data:protectedImage, mime_type:mimeType, instruction:command.trim(), action, model, regions, annotations, private_mode:privateMode, source }, (delta) => setResult((current) => current + delta));
+      const completed = await analyzeCapture({ image_data:protectedImage, mime_type:mimeType, instruction:command.trim(), action, model, regions, annotations, private_mode:privateMode, source, ocr_text:ocr?.text||"" }, (delta) => setResult((current) => current + delta));
       toast.success(completed?.saved ? "Analysis saved to history" : "Private analysis complete");
     } catch (error) { toast.error(error.message); } finally { setProcessing(false); }
   };
-  const copyResult = async () => { await navigator.clipboard.writeText(result); toast.success("Result copied"); };
+  const copyResult = async () => { await writeClipboard(result); toast.success("Result copied"); };
   const tools = [{ id:"region",label:"Select region",icon:Cursor },{ id:"freehand",label:"Draw",icon:PencilSimple },{ id:"redaction",label:"Redact",icon:EyeSlash }];
   return <section className="capture-page" data-testid="capture-workspace">
-    <div className="capture-toolbar" data-testid="capture-toolbar"><div className="tool-group">{tools.map(({ id,label,icon:Icon }) => <button key={id} className={tool === id ? "active" : ""} onClick={() => setTool(id)} data-testid={`canvas-tool-${id}-button`} title={label}><Icon /><span>{label}</span></button>)}</div><div className="toolbar-actions"><label className="private-toggle" data-testid="private-mode-control"><ShieldCheck /><span>Temporary</span><Switch checked={privateMode} onCheckedChange={setPrivateMode} data-testid="private-mode-switch" /></label><button onClick={() => fileRef.current?.click()} data-testid="upload-screenshot-button"><UploadSimple />Open image</button><button className="icon-only" onClick={() => { setImage("");setRegions([]);setAnnotations([]);setResult(""); }} data-testid="clear-capture-button" aria-label="Clear capture"><Trash /></button><input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => loadFile(event.target.files?.[0])} data-testid="screenshot-file-input" hidden /></div></div>
+    <div className="capture-toolbar" data-testid="capture-toolbar"><div className="tool-group">{tools.map(({ id,label,icon:Icon }) => <button key={id} className={tool === id ? "active" : ""} onClick={() => setTool(id)} data-testid={`canvas-tool-${id}-button`} title={label}><Icon /><span>{label}</span></button>)}<button onClick={runOcr} disabled={ocrLoading||!image} data-testid="run-ocr-button"><Scan /><span>{ocrLoading?"Reading…":"OCR"}</span></button></div><div className="toolbar-actions">{nativeShell&&<><button onClick={()=>runNativeCapture("active")} data-testid="capture-active-display-button"><Desktop />Active display</button><button onClick={()=>runNativeCapture("all")} data-testid="capture-all-displays-button"><Monitor />All displays</button></>}<label className="private-toggle" data-testid="private-mode-control"><ShieldCheck /><span>Temporary</span><Switch checked={privateMode} onCheckedChange={setPrivateMode} data-testid="private-mode-switch" /></label><button onClick={() => fileRef.current?.click()} data-testid="upload-screenshot-button"><UploadSimple />Open image</button><button className="icon-only" onClick={() => { setImage("");setRegions([]);setAnnotations([]);setResult("");setOcr(null); }} data-testid="clear-capture-button" aria-label="Clear capture"><Trash /></button><input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => loadFile(event.target.files?.[0])} data-testid="screenshot-file-input" hidden /></div></div>
     <div className="workspace-grid"><div className="canvas-panel" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault();loadFile(event.dataTransfer.files?.[0]); }} data-testid="screenshot-drop-zone"><div className="canvas-meta"><span data-testid="region-count">{regions.length} region{regions.length === 1 ? "" : "s"}</span><span data-testid="annotation-count">{annotations.length} mark{annotations.length === 1 ? "" : "s"}</span></div><CaptureCanvas {...{ image,regions,setRegions,annotations,setAnnotations,tool,processing }} /><CommandBar {...{ action,setAction,command,setCommand,model,setModel,onSubmit:runAnalysis,disabled:processing || !image,processing }} /></div>
-      <aside className="result-panel" data-testid="analysis-result-panel"><div className="result-header"><div><span className="eyebrow">AI output</span><h2 data-testid="analysis-result-title">Grounded result</h2></div>{result && <button onClick={copyResult} data-testid="copy-result-button" aria-label="Copy result"><Clipboard /></button>}</div>{processing && !result && <div className="result-loading" data-testid="analysis-loading-state"><i /><i /><i /><span>Reading selected context</span></div>}{result ? <div className="result-content" data-testid="analysis-result-content">{result}</div> : !processing && <div className="result-empty" data-testid="analysis-empty-state"><CheckCircle weight="thin" /><p>Your answer will stay anchored to the regions you point at.</p></div>}<div className="context-bundle" data-testid="context-bundle-summary"><span>CONTEXT BUNDLE</span><code>{`{ image, regions: ${regions.length}, marks: ${annotations.length}, private: ${privateMode} }`}</code></div></aside>
+      <aside className="result-panel" data-testid="analysis-result-panel"><div className="result-header"><div><span className="eyebrow">{ocr&&!result?"Deterministic OCR":"AI output"}</span><h2 data-testid="analysis-result-title">{ocr&&!result?"Structured extraction":"Grounded result"}</h2></div>{result && <button onClick={copyResult} data-testid="copy-result-button" aria-label="Copy result"><Clipboard /></button>}</div>{(processing||ocrLoading)&&!result&&!ocr&&<div className="result-loading" data-testid="analysis-loading-state"><i /><i /><i /><span>{ocrLoading?"Recovering text":"Reading selected context"}</span></div>}{result?<div className="result-content" data-testid="analysis-result-content">{result}</div>:ocr?<div className="ocr-result" data-testid="ocr-result"><div className="ocr-stats"><span data-testid="ocr-engine">{ocr.engine}</span><span data-testid="ocr-confidence">{Math.round(ocr.average_confidence*100)}% confidence</span><span data-testid="ocr-word-count">{ocr.words.length} words</span></div><pre data-testid="ocr-text-content">{ocr.text||"No text detected"}</pre><ExportBar payload={ocr} source={source} /></div>:!processing&&!ocrLoading&&<div className="result-empty" data-testid="analysis-empty-state"><CheckCircle weight="thin" /><p>Your answer will stay anchored to the regions you point at.</p></div>}<div className="context-bundle" data-testid="context-bundle-summary"><span>CONTEXT BUNDLE</span><code>{`{ image, regions: ${regions.length}, marks: ${annotations.length}, ocr: ${ocr?.words?.length||0}, private: ${privateMode} }`}</code></div></aside>
     </div>
   </section>;
 }

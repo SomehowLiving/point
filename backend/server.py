@@ -14,6 +14,8 @@ from typing import List, Literal, Optional
 import uuid
 from datetime import datetime, timezone
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent, TextDelta, StreamDone
+from ocr_service import extract_ocr
+from export_service import render_export
 
 
 ROOT_DIR = Path(__file__).parent
@@ -59,6 +61,30 @@ class SourceContext(BaseModel):
     application: str = Field(default="Web dashboard", max_length=100)
     window_title: str = Field(default="", max_length=300)
     url: str = Field(default="", max_length=2000)
+    displays: List[dict] = Field(default_factory=list, max_length=16)
+    page_context: dict = Field(default_factory=dict)
+
+
+class OCRRequest(BaseModel):
+    image_data: str
+    mime_type: str
+    engine: Literal["auto", "tesseract", "paddle"] = "auto"
+    language: str = Field(default="eng", pattern=r"^[a-zA-Z+_-]{2,40}$")
+    regions: List[Region] = Field(default_factory=list, max_length=12)
+
+    @field_validator("mime_type")
+    @classmethod
+    def validate_ocr_mime_type(cls, value: str) -> str:
+        if value not in SUPPORTED_MIME_TYPES:
+            raise ValueError("Only PNG, JPEG, and WEBP images are supported")
+        return value
+
+
+class ExportRequest(BaseModel):
+    format: Literal["text", "markdown", "json", "csv"]
+    title: str = Field(default="Spatial AI extraction", max_length=200)
+    source: SourceContext = Field(default_factory=SourceContext)
+    payload: dict
 
 
 class AnalyzeRequest(BaseModel):
@@ -71,6 +97,7 @@ class AnalyzeRequest(BaseModel):
     annotations: List[Annotation] = Field(default_factory=list, max_length=30)
     source: SourceContext = Field(default_factory=SourceContext)
     private_mode: bool = False
+    ocr_text: str = Field(default="", max_length=100000)
 
     @field_validator("mime_type")
     @classmethod
@@ -99,6 +126,7 @@ class Capture(BaseModel):
     annotations: List[Annotation]
     source: SourceContext
     thumbnail: str = ""
+    ocr_text: str = ""
 
 
 def parse_image_data(image_data: str) -> bytes:
@@ -129,6 +157,7 @@ def build_prompt(request: AnalyzeRequest) -> str:
         "source": request.source.model_dump(),
         "regions_normalized_to_image": regions,
         "annotations": annotations,
+        "deterministic_ocr": request.ocr_text,
     }
     return (
         "You are the Spatial AI Context Layer. Analyze the screenshot and prioritize only the user-marked regions. "
@@ -151,6 +180,45 @@ async def models():
             {"id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro", "provider": "Google"},
         ]
     }
+
+
+@api_router.post("/ocr/extract")
+async def ocr_extract(request: OCRRequest):
+    image_bytes = parse_image_data(request.image_data)
+    try:
+        result = await __import__("asyncio").to_thread(
+            extract_ocr,
+            image_bytes,
+            [region.model_dump() for region in request.regions],
+            request.engine,
+            request.language,
+        )
+        return result
+    except Exception as exc:
+        logger.exception("Deterministic OCR failed")
+        raise HTTPException(status_code=500, detail=f"OCR failed: {exc}") from exc
+
+
+@api_router.get("/ocr/status")
+async def ocr_status():
+    import importlib.util
+    import shutil
+    return {
+        "default": "auto",
+        "engines": [
+            {"id": "tesseract", "available": bool(shutil.which("tesseract")), "mode": "in-process"},
+            {"id": "paddleocr", "available": bool(importlib.util.find_spec("paddleocr") and importlib.util.find_spec("paddle")), "mode": "isolated-worker"},
+        ],
+        "fallback_order": ["tesseract", "paddleocr", "tesseract"],
+    }
+
+
+@api_router.post("/exports/render")
+async def export_render(request: ExportRequest):
+    try:
+        return render_export(request.payload, request.format, request.title, request.source.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @api_router.post("/captures/analyze")
 async def analyze_capture(request: AnalyzeRequest):
@@ -196,6 +264,7 @@ async def analyze_capture(request: AnalyzeRequest):
                 "annotations": [annotation.model_dump() for annotation in request.annotations],
                 "source": request.source.model_dump(),
                 "thumbnail": "" if request.private_mode else f"data:{request.mime_type};base64,{image_payload}",
+                "ocr_text": request.ocr_text,
             }
             if not request.private_mode:
                 await db.captures.insert_one(dict(capture_payload))

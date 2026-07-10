@@ -79,4 +79,6 @@ agenthub/agents/youtube/db
 memory/test_credentials.md
 
 # Mobile development
-android-sdk/
+android-sdk/desktop/src-tauri/target/debug/deps/libtauri_macros-0f32bc3993aded87.so
+desktop/src-tauri/target/debug/build/spatial-ai-context-layer-d771fafae4e9ee41/build_script_build-d771fafae4e9ee41
+desktop/src-tauri/target/debug/build/spatial-ai-context-layer-d771fafae4e9ee41/build-script-build

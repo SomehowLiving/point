@@ -5,10 +5,12 @@ import os
 import struct
 import zlib
 import base64
+import io
 from typing import Dict, List, Tuple
 
 import pytest
 import requests
+from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 
 
@@ -209,3 +211,206 @@ def test_delete_unknown_capture_returns_404():
     assert response.status_code == 404
     data = response.json()
     assert "not found" in data["detail"].lower()
+
+
+def _ocr_image_data_url() -> str:
+    image = Image.new("RGB", (1200, 320), "white")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default(size=64)
+    draw.text((45, 45), "Spatial OCR Invoice 4821", fill="black", font=font)
+    draw.text((45, 150), "Total: 193.75 USD Status: PAID", fill="black", font=font)
+    stream = io.BytesIO()
+    image.save(stream, format="PNG")
+    return f"data:image/png;base64,{base64.b64encode(stream.getvalue()).decode('ascii')}"
+
+
+def test_deterministic_ocr_and_status():
+    status = requests.get(f"{API_BASE}/ocr/status", timeout=30)
+    assert status.status_code == 200
+    assert status.json()["engines"][0]["available"] is True
+    response = requests.post(
+        f"{API_BASE}/ocr/extract",
+        json={"image_data": _ocr_image_data_url(), "mime_type": "image/png", "engine": "tesseract", "language": "eng", "regions": []},
+        timeout=60,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["engine"] == "tesseract"
+    assert "Spatial OCR" in payload["text"]
+    assert "193.75" in payload["text"]
+    assert payload["words"] and payload["average_confidence"] > 0.5
+
+
+def test_ocr_extract_returns_word_boxes_engine_metadata_and_image_dimensions():
+    response = requests.post(
+        f"{API_BASE}/ocr/extract",
+        json={
+            "image_data": _ocr_image_data_url(),
+            "mime_type": "image/png",
+            "engine": "tesseract",
+            "language": "eng",
+            "regions": [],
+        },
+        timeout=60,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload.get("text"), str)
+    assert isinstance(payload.get("words"), list)
+    assert payload.get("engine") == "tesseract"
+    assert isinstance(payload.get("engines_tried"), list)
+    assert payload.get("image", {}).get("width") == 1200
+    assert payload.get("image", {}).get("height") == 320
+    first_word = payload["words"][0]
+    assert isinstance(first_word.get("confidence"), float)
+    assert set(first_word.get("box", {}).keys()) == {"x", "y", "width", "height"}
+
+
+def _ocr_region_test_image_data_url() -> str:
+    image = Image.new("RGB", (1400, 320), "white")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default(size=70)
+    draw.text((40, 110), "LEFT 11111", fill="black", font=font)
+    draw.text((860, 110), "RIGHT 99999", fill="black", font=font)
+    stream = io.BytesIO()
+    image.save(stream, format="PNG")
+    return f"data:image/png;base64,{base64.b64encode(stream.getvalue()).decode('ascii')}"
+
+
+def test_ocr_region_only_extraction_respects_normalized_rectangles():
+    payload = {
+        "image_data": _ocr_region_test_image_data_url(),
+        "mime_type": "image/png",
+        "engine": "tesseract",
+        "language": "eng",
+        "regions": [{"id": "left", "x": 0.0, "y": 0.0, "width": 0.49, "height": 1.0}],
+    }
+    response = requests.post(f"{API_BASE}/ocr/extract", json=payload, timeout=60)
+    assert response.status_code == 200
+    data = response.json()
+    text = data.get("text", "").upper()
+    assert "11111" in text or "LEFT" in text
+    assert "99999" not in text and "RIGHT" not in text
+
+
+def test_ocr_explicit_paddle_request_isolated_fallback_does_not_crash_backend():
+    paddle_response = requests.post(
+        f"{API_BASE}/ocr/extract",
+        json={
+            "image_data": _ocr_image_data_url(),
+            "mime_type": "image/png",
+            "engine": "paddle",
+            "language": "eng",
+            "regions": [],
+        },
+        timeout=120,
+    )
+    assert paddle_response.status_code == 200
+    payload = paddle_response.json()
+    assert payload.get("engine") in {"paddleocr", "tesseract"}
+    assert "paddleocr" in payload.get("engines_tried", [])
+    assert isinstance(payload.get("fallback_used"), bool)
+
+    # Health check after explicit paddle path confirms backend did not crash.
+    health = requests.get(f"{API_BASE}/", timeout=30)
+    assert health.status_code == 200
+
+
+@pytest.mark.parametrize("export_format,expected_extension", [("text", ".txt"), ("markdown", ".md"), ("json", ".json"), ("csv", ".csv")])
+def test_structured_exports(export_format: str, expected_extension: str):
+    response = requests.post(
+        f"{API_BASE}/exports/render",
+        json={
+            "format": export_format,
+            "title": "Invoice 4821",
+            "source": {"application": "Test", "window_title": "Invoice", "url": "https://example.test"},
+            "payload": {"text": "Invoice 4821\nTotal 193.75", "words": [{"region": 0, "text": "Invoice", "confidence": 0.98, "box": {"x": 1, "y": 2, "width": 80, "height": 20}}]},
+        },
+        timeout=30,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["filename"].endswith(expected_extension)
+    assert payload["content"]
+
+
+@pytest.mark.parametrize(
+    "export_format,expected_extension,expected_mime",
+    [
+        ("text", ".txt", "text/plain;charset=utf-8"),
+        ("markdown", ".md", "text/markdown;charset=utf-8"),
+        ("json", ".json", "application/json"),
+        ("csv", ".csv", "text/csv;charset=utf-8"),
+    ],
+)
+def test_export_mime_filename_and_non_empty_content(
+    export_format: str,
+    expected_extension: str,
+    expected_mime: str,
+):
+    response = requests.post(
+        f"{API_BASE}/exports/render",
+        json={
+            "format": export_format,
+            "title": "Spatial OCR report",
+            "source": {"application": "Test", "window_title": "Invoice", "url": "https://example.test"},
+            "payload": {
+                "text": "Invoice 4821\nTotal 193.75",
+                "words": [
+                    {
+                        "region": 0,
+                        "text": "Invoice",
+                        "confidence": 0.98,
+                        "box": {"x": 1, "y": 2, "width": 80, "height": 20},
+                    }
+                ],
+            },
+        },
+        timeout=30,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["filename"].endswith(expected_extension)
+    assert payload["mime_type"] == expected_mime
+    assert isinstance(payload["content"], str) and len(payload["content"].strip()) > 0
+
+
+def test_saved_capture_persists_ocr_text_field():
+    marker = "TEST_OCR_CONTEXT_PERSIST"
+    ocr_text = "DETERMINISTIC_OCR_CONTEXT: invoice 4821 total 193.75"
+    response = requests.post(
+        f"{API_BASE}/captures/analyze",
+        json={
+            "image_data": SAMPLE_IMAGE_DATA_URL,
+            "mime_type": "image/png",
+            "instruction": f"{marker} include ocr context",
+            "action": "summarize",
+            "model": "gemini-3.1-pro-preview",
+            "regions": [],
+            "annotations": [],
+            "source": {
+                "application": "Web dashboard",
+                "window_title": "TEST OCR",
+                "url": "https://example.test/ocr",
+            },
+            "private_mode": False,
+            "ocr_text": ocr_text,
+        },
+        timeout=180,
+        stream=True,
+    )
+    assert response.status_code == 200
+    events = _stream_events(response)
+    done = next((event for event in events if event.get("type") == "done"), None)
+    assert done is not None
+    capture = done["capture"]
+    capture_id = capture["id"]
+    assert capture.get("ocr_text") == ocr_text
+
+    detail = requests.get(f"{API_BASE}/captures/{capture_id}", timeout=30)
+    assert detail.status_code == 200
+    detail_payload = detail.json()
+    assert detail_payload.get("ocr_text") == ocr_text
+
+    cleanup = requests.delete(f"{API_BASE}/captures/{capture_id}", timeout=30)
+    assert cleanup.status_code == 200

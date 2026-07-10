@@ -1,0 +1,58 @@
+{
+  "summary": "Executed backend + frontend regression for OCR/export/context-layer updates on public preview URL. Backend API suite passed (19/19) including OCR status/extract, region-only OCR, isolated Paddle fallback, export MIME+filename checks, and OCR text persistence on saved captures. Frontend OCR/export UI passed on desktop and mobile with one model-specific analysis failure and one clipboard graceful-handling issue.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "ExportBar clipboard copy (web browser mode)",
+        "issue": "Copy export buttons trigger unhandled browser clipboard permission error in console instead of fully graceful handling path.",
+        "selector": "[data-testid^='copy-'][data-testid$='-export-button']",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Upload -> OCR -> Run analysis using default GPT-5.5 model",
+        "issue": "Analysis result did not render within 120-180s in repeated runs after OCR; switching model to Gemini 3.1 Pro produced immediate valid output.",
+        "affected_selectors": [
+          "[data-testid='model-selector-trigger']",
+          "[data-testid='model-option-gpt-5-5']",
+          "[data-testid='run-analysis-button']",
+          "[data-testid='analysis-result-content']"
+        ]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_api.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/extension/validation-results.json"
+  ],
+  "action_items": [
+    "Investigate GPT-5.5 analyze flow after OCR/image upload in web UI path; ensure done/error event is surfaced and user receives deterministic feedback.",
+    "Handle clipboard permission-denied errors gracefully in ExportBar copy actions (catch + toast message without uncaught page error).",
+    "Re-run quick UI regression after fixes on both default GPT model and Gemini model."
+  ],
+  "critical_code_review_comments": [
+    "Frontend writeClipboard() path does not guard navigator.clipboard permission failures; this leaks PAGE ERROR in browser mode.",
+    "Model-specific reliability gap exists in default GPT flow, while Gemini succeeds under same UI/context payload, suggesting provider-path handling inconsistency."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_api.py",
+    "/app/test_reports/iteration_2.json"
+  ],
+  "success_rate": {
+    "backend": "100%",
+    "frontend": "88%"
+  },
+  "test_credentials": "No auth flow required. /app/memory/test_credentials.md exists but contains no credentials.",
+  "seed_data_creation": "Used synthetic OCR PNGs generated in pytest and existing non-blank local PNG/JPEG assets for browser upload tests.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend OCR/export regression is currently green (19 passed). Extension validation-results.json contains 7/7 successful real-site captures with screenshot_bytes > 10KB (min 14982). UI issue remains model-specific: GPT-5.5 path failed to show analysis result in repeated post-OCR runs, while Gemini path succeeded.",
+  "rca of the issue": "RCA 1 (analysis): Repro by uploading a real nonblank image, running OCR, keeping default GPT-5.5 model, then clicking Run analysis. Result panel stayed without analysis content through timeout in repeated runs; same flow with Gemini model returned content quickly. Likely model/provider-path specific stream failure or unhandled SSE error branch. RCA 2 (clipboard): Export copy buttons in browser mode call navigator.clipboard.writeText without local catch in component flow, causing permission-denied PAGE ERROR under restricted clipboard permissions instead of user-facing graceful fallback."
+}

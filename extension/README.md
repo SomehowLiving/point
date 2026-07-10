@@ -5,4 +5,6 @@
 3. Choose **Load unpacked** and select this `extension` directory.
 4. Click the extension icon or press `Alt+Shift+S` to capture the visible tab.
 
-The service worker stores the screenshot and browser metadata in `chrome.storage.local`, then opens the capture workspace. A narrowly scoped content-script bridge transfers that pending capture into the workspace and immediately clears it from extension storage.
+The service worker stores the screenshot and enriched browser context in `chrome.storage.local`, then opens the capture workspace. Enrichment includes the URL, title, canonical URL, description, selected text, headings, visible text, links, and viewport metadata. A narrowly scoped content-script bridge transfers the pending capture into the workspace and immediately clears it from extension storage.
+
+The extension writes its latest validation result to `chrome.storage.local.lastCaptureStatus`, including the tested hostname, screenshot payload size, enrichment status, and any capture error.

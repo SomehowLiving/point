@@ -1,5 +1,13 @@
 .settings-list > div { display: grid; grid-template-columns: 44px 1fr auto; gap: 16px; align-items: center; padding: 24px 0; border-bottom: 1px solid #292932; }
 .settings-list > div > svg { font-size: 28px; color: #d4d4d8; }
+.ocr-result { padding: 20px; overflow: auto; flex: 1; }
+.ocr-stats { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 16px; }
+.ocr-stats span { border: 1px solid #34343d; background: #171720; border-radius: 4px; padding: 5px 7px; color: #b8b8c2; font: 10px 'JetBrains Mono'; text-transform: uppercase; }
+.ocr-result pre { white-space: pre-wrap; color: #e4e4e7; font: 13px/1.65 'JetBrains Mono'; }
+.export-bar { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; margin-top: 20px; }
+.export-bar > div { display: grid; grid-template-columns: 1fr 34px 34px; align-items: center; border: 1px solid #34343d; background: #101016; border-radius: 4px; padding-left: 10px; }
+.export-bar span { color: #a1a1aa; font: 10px 'JetBrains Mono'; text-transform: uppercase; }
+.export-bar button { height: 34px; border: 0; border-left: 1px solid #34343d; background: transparent; color: #d4d4d8; display: grid; place-items: center; cursor: pointer; }
 @media (max-width: 760px) {
   .capture-page { padding-bottom: 24px; }
   .canvas-panel { height: 640px; padding-bottom: 136px; border-color: #3f3f49; }
