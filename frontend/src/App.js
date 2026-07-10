@@ -1,4 +1,5 @@
 import "@/App.css";
+import "@/mobile.css";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
 import { AppShell } from "@/components/AppShell";

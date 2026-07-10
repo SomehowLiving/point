@@ -1,0 +1,13 @@
+.settings-list > div { display: grid; grid-template-columns: 44px 1fr auto; gap: 16px; align-items: center; padding: 24px 0; border-bottom: 1px solid #292932; }
+.settings-list > div > svg { font-size: 28px; color: #d4d4d8; }
+@media (max-width: 760px) {
+  .capture-page { padding-bottom: 24px; }
+  .canvas-panel { height: 640px; padding-bottom: 136px; border-color: #3f3f49; }
+  .capture-canvas { background-color: #0d0d14; }
+  .empty-canvas { color: #b8b8c2; padding: 24px 18px; }
+  .empty-canvas p { color: #a4a4ae; line-height: 1.55; }
+  .command-dock { position: absolute; left: 50%; right: auto; bottom: 116px; width: calc(100% - 28px); transform: translateX(-50%); background: rgba(12, 12, 18, 0.97); border-color: rgba(255,255,255,.22); box-shadow: 0 18px 44px rgba(0,0,0,.8); z-index: 70; }
+  .action-strip { min-height: 46px; align-items: center; }
+  .command-entry { padding: 10px; }
+  .result-panel { margin-bottom: 24px; border-color: #3f3f49; }
+}

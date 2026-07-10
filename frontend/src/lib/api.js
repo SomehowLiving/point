@@ -33,7 +33,8 @@ export async function analyzeCapture(payload, onDelta) {
 }
 
 export async function getCaptures(search = "") {
-  const response = await fetch(`${API}/captures?search=${encodeURIComponent(search)}`);
+  const params = new URLSearchParams({ search, refresh: Date.now().toString() });
+  const response = await fetch(`${API}/captures?${params}`, { cache: "no-store" });
   if (!response.ok) throw new Error("Capture history could not be loaded");
   return response.json();
 }

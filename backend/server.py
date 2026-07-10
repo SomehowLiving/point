@@ -213,7 +213,7 @@ async def analyze_capture(request: AnalyzeRequest):
 
 
 @api_router.get("/captures", response_model=List[Capture])
-async def list_captures(search: str = Query(default="", max_length=200)):
+async def list_captures(search: str = Query(default="", max_length=200), refresh: str = Query(default="", max_length=40)):
     query = {}
     if search.strip():
         safe = re.escape(search.strip())
