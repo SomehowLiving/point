@@ -50,6 +50,19 @@ The initial product should validate a Windows desktop application and Chrome ext
 
 ## Implemented
 
+### 2026-07-10 — Signed Hardware Validation Hardening
+
+- Added Windows Per-Monitor V2 DPI awareness before native capture initialization.
+- Corrected virtual-desktop stitching to use captured physical bitmap dimensions with signed monitor coordinates, including negative virtual origins.
+- Added display capture metrics, physical scale ratios, metadata/capture consistency checks, virtual bounds, seam diagnostics, and stitched PNG evidence.
+- Added `--hardware-report` native mode with deterministic pass/fail exit codes and a two-pixel seam tolerance.
+- Added local PFX signing through Tauri `signCommand`, required secure environment variables, SHA-256/RFC3161 timestamping, and post-sign Authenticode verification.
+- Added signed NSIS/MSI manifest generation with installer hashes, signer, and timestamp details.
+- Added a one-command Windows 10/11 hardware validator that installs the OS-specific package, verifies signatures, checks 100%/150% topology, runs the native probe, and returns a ZIP report.
+- Added self-hosted Windows workflow support for building, signing, verifying, and collecting both installers.
+- Windows target compilation, frontend production build, and 19 backend regressions pass. Mandatory focused testing review confirmed the implementation.
+- External action remains: real signing and physical Windows 10/11 dual-monitor execution require the user's PFX environment and Windows hosts; these were not available in the Linux workspace.
+
 ### 2026-07-10 — Native Packaging, Extension Validation, and Deterministic OCR
 
 - Upgraded the Tauri shell from scaffold to native Windows capture source with active-monitor and stitched all-monitor capture, explicit hide/capture/show behavior, source display metadata, clipboard plugin, and `Alt+Shift+S` capture.
@@ -81,8 +94,9 @@ The initial product should validate a Windows desktop application and Chrome ext
 
 ### P0 — Next Validation Work
 
-- Run the generated NSIS/MSI packages on physical Windows 10 and Windows 11 machines and sign the installers.
-- Validate mixed-DPI monitor stitching and cursor-to-display mapping on a physical multi-monitor Windows setup.
+- Run `desktop/build-windows.ps1` on the certificate-enabled Windows self-hosted runner.
+- Run `desktop/validate-hardware.ps1` on physical Windows 10 and Windows 11 hosts and return both generated ZIP reports.
+- Review real seam deltas, captured scaling, and Authenticode evidence before marking hardware validation complete.
 - Install and benchmark PaddleOCR on an x86_64 Windows or Linux runtime where its native backend is supported.
 
 ### P1 — Product Depth
