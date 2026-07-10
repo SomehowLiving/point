@@ -1,0 +1,5 @@
+{
+  "capture": {"image": "base64-png", "display": 1, "scaleFactor": 1.25},
+  "source": {"application": "Google Chrome", "window_title": "Production Dashboard", "url": ""},
+  "privacy": {"temporary": false, "redactionsApplied": true}
+}

@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Spatial AI Context Layer",
+  "version": "0.1.0",
+  "description": "Select visible web context and send it to Spatial AI.",
+  "permissions": ["activeTab", "tabs", "storage", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "background": {"service_worker": "background.js"},
+  "content_scripts": [
+    {
+      "matches": ["http://localhost:3000/*", "https://*.preview.emergentagent.com/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {"default_title": "Capture with Spatial AI"},
+  "commands": {
+    "capture-context": {
+      "suggested_key": {"default": "Alt+Shift+S", "windows": "Alt+Shift+S"},
+      "description": "Capture visible context"
+    }
+  }
+}

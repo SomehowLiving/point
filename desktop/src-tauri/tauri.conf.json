@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Spatial AI Context Layer",
+  "version": "0.1.0",
+  "identifier": "com.spatialai.contextlayer",
+  "build": {
+    "frontendDist": "../../frontend/build",
+    "devUrl": "http://localhost:3000"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "capture",
+        "title": "Spatial AI Capture",
+        "url": "/capture",
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": false,
+        "alwaysOnTop": true,
+        "width": 1440,
+        "height": 900
+      }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": { "active": true, "targets": ["nsis"] }
+}

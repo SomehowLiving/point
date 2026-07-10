@@ -1,0 +1,12 @@
+import { useEffect, useState } from "react";
+import { MagnifyingGlass, Trash } from "@phosphor-icons/react";
+import { toast } from "sonner";
+import { deleteCapture, getCaptures } from "@/lib/api";
+
+export default function HistoryPage() {
+  const [captures,setCaptures]=useState([]); const [search,setSearch]=useState(""); const [selected,setSelected]=useState(null);
+  const load = async (term="") => { try { setCaptures(await getCaptures(term)); } catch(error) { toast.error(error.message); } };
+  useEffect(() => { load(); }, []);
+  const remove = async (id) => { await deleteCapture(id);setSelected(null);await load(search);toast.success("Capture deleted"); };
+  return <section className="history-page" data-testid="capture-history-page"><div className="history-search"><MagnifyingGlass /><input value={search} onChange={(event)=>setSearch(event.target.value)} onKeyDown={(event)=>event.key==="Enter"&&load(search)} placeholder="Search instructions, answers, or page titles" data-testid="history-search-input" /><button onClick={()=>load(search)} data-testid="history-search-button">Search</button></div><div className="history-layout"><div className="capture-grid" data-testid="capture-history-grid">{captures.map((capture,index)=><button key={capture.id} className="capture-card" onClick={()=>setSelected(capture)} data-testid={`capture-history-item-${index}`}><div className="capture-thumb">{capture.thumbnail?<img src={capture.thumbnail} alt="Saved capture" />:<span>No preview</span>}<b>{capture.action}</b></div><div><span>{new Date(capture.created_at).toLocaleString()}</span><h3>{capture.instruction}</h3><p>{capture.result}</p></div></button>)}{!captures.length&&<div className="history-empty" data-testid="history-empty-state"><strong>No captures found</strong><p>Saved analyses will appear here.</p></div>}</div><aside className="history-detail" data-testid="capture-history-detail">{selected?<><span className="eyebrow">{selected.model}</span><h2 data-testid="selected-capture-instruction">{selected.instruction}</h2><p data-testid="selected-capture-result">{selected.result}</p><code data-testid="selected-capture-source">{selected.source.url||selected.source.window_title||selected.source.application}</code><button onClick={()=>remove(selected.id)} data-testid="delete-selected-capture-button"><Trash />Delete capture</button></>:<p data-testid="history-selection-prompt">Select a capture to inspect its context.</p>}</aside></div></section>;
+}
