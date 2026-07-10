@@ -3,6 +3,7 @@ cargo:rustc-check-cfg=cfg(desktop)
 cargo:rustc-cfg=desktop
 cargo:rustc-check-cfg=cfg(mobile)
 cargo:rerun-if-changed=/app/desktop/src-tauri/tauri.conf.json
+cargo:rerun-if-changed=/app/desktop/src-tauri/tauri.windows.conf.json
 cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_APP_NAME=contextlayer
 cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_PREFIX=com_spatialai
 cargo:rustc-check-cfg=cfg(dev)

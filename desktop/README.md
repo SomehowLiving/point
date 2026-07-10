@@ -26,3 +26,15 @@ powershell -ExecutionPolicy Bypass -File .\desktop\build-windows.ps1
 ```
 
 This creates an NSIS `.exe` and WiX `.msi` under `desktop/src-tauri/target/release/bundle`. The repository workflow `.github/workflows/windows-installers.yml` performs the same build on a Windows runner.
+
+The build requires `WINDOWS_CERT_PATH`, `WINDOWS_CERT_PASSWORD`, and `TIMESTAMP_URL`. Tauri signs the inner executable and generated installers; the script verifies every signature and writes SHA-256 hashes to `signed-package-manifest.json`.
+
+## Physical mixed-DPI validation
+
+Follow `HARDWARE_VALIDATION.md`, or run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\desktop\validate-hardware.ps1
+```
+
+The native probe uses Per-Monitor V2 awareness and captured pixel dimensions—not logical dimensions—to stitch mixed-DPI displays. It returns a JSON report, stitched PNG, signature evidence, and ZIP package.
