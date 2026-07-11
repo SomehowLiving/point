@@ -84,3 +84,9 @@ desktop/src-tauri/target/debug/build/spatial-ai-context-layer-d771fafae4e9ee41/b
 desktop/src-tauri/target/debug/build/spatial-ai-context-layer-d771fafae4e9ee41/build-script-build
 desktop/src-tauri/target/debug/deps/libtauri_macros-0f32bc3993aded87.so
 frontend/node_modules/.cache/default-development/0.pack
+.env
+.env.*
+*.env
+credentials.json
+*.key
+.credentials
