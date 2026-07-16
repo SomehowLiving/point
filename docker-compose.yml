@@ -1,0 +1,52 @@
+# Local dev stack for Point.
+#
+#   docker compose up -d                      # mongo + backend (http://localhost:8001)
+#   docker compose --profile frontend up -d   # also run the CRA dev server (http://localhost:3000)
+#
+# The frontend/extension/Tauri shell normally run on the host; the frontend service here is
+# optional (profile "frontend"). Backend code is bind-mounted with --reload for live editing.
+# To enable the PaddleOCR fallback engine (Linux-only wheels):
+#   docker compose build --build-arg INSTALL_PADDLE=true backend
+
+services:
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    ports:
+      - "8001:8001"
+    env_file: backend/.env
+    environment:
+      # override the Windows-host values in backend/.env
+      MONGO_URL: mongodb://mongo:27017
+      TESSERACT_CMD: /usr/bin/tesseract
+    volumes:
+      - ./backend:/app
+    command: uvicorn server:app --host 0.0.0.0 --port 8001 --reload
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  frontend:
+    profiles: ["frontend"]
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      REACT_APP_BACKEND_URL: http://localhost:8001
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+
+volumes:
+  mongo_data:

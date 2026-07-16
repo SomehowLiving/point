@@ -4,6 +4,10 @@
 .idea/
 .vscode/
 
+# Local dev server logs
+backend/uvicorn.*.log
+frontend/frontend.*.log
+
 # Dependencies
 node_modules/
 /node_modules

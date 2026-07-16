@@ -24,6 +24,25 @@ if not BASE_URL:
 API_BASE = f"{BASE_URL.rstrip('/')}/api"
 
 
+# These tests call real AI providers end-to-end and are pinned with @pytest.mark.integration —
+# they need an internet connection and a provider account that actually has quota (not just a
+# present API key). Run them explicitly with `pytest -m integration`; the default local command
+# (`pytest`, no -m filter) does not require paid API quota to pass: a provider-side quota/rate-
+# limit error causes an automatic skip here rather than a red herring test failure. A genuine bug
+# (malformed response, 500, wrong field) still fails normally — this only recognizes the specific,
+# well-known "the account has no quota" class of error.
+QUOTA_ERROR_HINTS = ("insufficient_quota", "resource_exhausted", "rate limit", "quota", "429")
+
+
+def _skip_if_provider_unavailable(events: List[Dict]) -> None:
+    error_event = next((event for event in events if event.get("type") == "error"), None)
+    if not error_event:
+        return
+    message = str(error_event.get("message", "")).lower()
+    if any(hint in message for hint in QUOTA_ERROR_HINTS):
+        pytest.skip(f"Provider quota/rate-limit unavailable for this integration test: {error_event.get('message', '')[:200]}")
+
+
 def _chunk(tag: bytes, data: bytes) -> bytes:
     return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
 
@@ -142,6 +161,7 @@ def test_analyze_validation_invalid_mime():
     assert "supported" in detail.lower() or "png" in detail.lower()
 
 
+@pytest.mark.integration
 def test_private_mode_analysis_not_saved():
     marker = "TEST_PRIVATE_MODE_ANALYSIS"
     response, events = _analyze_request(
@@ -150,6 +170,7 @@ def test_private_mode_analysis_not_saved():
         instruction=f"{marker}: Describe visible elements.",
     )
     assert response.status_code == 200
+    _skip_if_provider_unavailable(events)
     assert any(event.get("type") == "delta" for event in events)
     done = next((event for event in events if event.get("type") == "done"), None)
     assert done is not None
@@ -166,6 +187,7 @@ def test_private_mode_analysis_not_saved():
     assert all(marker not in item["instruction"] for item in records)
 
 
+@pytest.mark.integration
 def test_saved_capture_history_detail_and_delete_flow():
     marker = "TEST_SAVED_MODE_ANALYSIS"
     response, events = _analyze_request(
@@ -174,6 +196,7 @@ def test_saved_capture_history_detail_and_delete_flow():
         instruction=f"{marker}: Summarize highlighted context.",
     )
     assert response.status_code == 200
+    _skip_if_provider_unavailable(events)
     assert any(event.get("type") == "delta" for event in events)
 
     done = next((event for event in events if event.get("type") == "done"), None)
@@ -375,6 +398,7 @@ def test_export_mime_filename_and_non_empty_content(
     assert isinstance(payload["content"], str) and len(payload["content"].strip()) > 0
 
 
+@pytest.mark.integration
 def test_saved_capture_persists_ocr_text_field():
     marker = "TEST_OCR_CONTEXT_PERSIST"
     ocr_text = "DETERMINISTIC_OCR_CONTEXT: invoice 4821 total 193.75"
@@ -401,6 +425,7 @@ def test_saved_capture_persists_ocr_text_field():
     )
     assert response.status_code == 200
     events = _stream_events(response)
+    _skip_if_provider_unavailable(events)
     done = next((event for event in events if event.get("type") == "done"), None)
     assert done is not None
     capture = done["capture"]
@@ -414,3 +439,80 @@ def test_saved_capture_persists_ocr_text_field():
 
     cleanup = requests.delete(f"{API_BASE}/captures/{capture_id}", timeout=30)
     assert cleanup.status_code == 200
+
+
+def test_extract_search_query_prefers_deterministic_ocr_text_over_instruction():
+    # Pure-function unit test — no network, no live server dependency. Imports directly from the
+    # server module rather than going through HTTP, since this is plumbing logic, not an endpoint.
+    from server import extract_search_query, AnalyzeRequest
+
+    request = AnalyzeRequest(
+        image_data=SAMPLE_IMAGE_DATA_URL,
+        mime_type="image/png",
+        instruction="find the official docs for this",
+        action="search",
+        model="gpt-5.5",
+        ocr_text="  Playwright   browser automation  ",
+    )
+    assert extract_search_query(request) == "Playwright browser automation"
+
+
+def test_extract_search_query_falls_back_to_instruction_without_ocr_text():
+    from server import extract_search_query, AnalyzeRequest
+
+    request = AnalyzeRequest(
+        image_data=SAMPLE_IMAGE_DATA_URL,
+        mime_type="image/png",
+        instruction="find the official docs for this product",
+        action="search",
+        model="gpt-5.5",
+    )
+    assert extract_search_query(request) == "find the official docs for this product"
+
+
+def _searxng_reachable() -> bool:
+    searxng_url = os.environ.get("SEARXNG_URL", "http://localhost:8888")
+    try:
+        response = requests.get(f"{searxng_url}/search", params={"q": "ping", "format": "json"}, timeout=5)
+        return response.status_code == 200
+    except requests.RequestException:
+        return False
+
+
+@pytest.mark.integration
+def test_search_action_returns_real_ranked_results_with_citations():
+    if not _searxng_reachable():
+        pytest.skip("SearXNG is not reachable at SEARXNG_URL — this integration test needs the local SearXNG container running")
+    marker = "TEST_REAL_SEARCH_ACTION"
+    response = requests.post(
+        f"{API_BASE}/captures/analyze",
+        json={
+            "image_data": SAMPLE_IMAGE_DATA_URL,
+            "mime_type": "image/png",
+            "instruction": f"{marker}: find the official documentation for this",
+            "action": "search",
+            "model": "openrouter",
+            "regions": [],
+            "annotations": [],
+            "source": {"application": "Web dashboard", "window_title": "TEST search", "url": "https://example.test/search"},
+            "private_mode": True,
+            "ocr_text": "Playwright browser automation",
+        },
+        timeout=180,
+        stream=True,
+    )
+    assert response.status_code == 200
+    events = _stream_events(response)
+    _skip_if_provider_unavailable(events)
+
+    search_event = next((event for event in events if event.get("type") == "search_results"), None)
+    assert search_event is not None, "expected a search_results event before the AI answer streams"
+    results = search_event["results"]
+    assert len(results) > 0
+    assert all(result.get("url", "").startswith("http") for result in results)
+    assert any("playwright" in (result.get("url", "") + result.get("title", "")).lower() for result in results), \
+        "expected at least one result about Playwright given the OCR-grounded query"
+
+    done = next((event for event in events if event.get("type") == "done"), None)
+    assert done is not None
+    assert done["capture"]["search_results"] == results

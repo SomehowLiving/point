@@ -38,7 +38,7 @@ for (const [name, url] of sites) {
     const title = await page.title();
     const result = await worker.evaluate(async (targetUrl) => {
       const tabs = await chrome.tabs.query({});
-      const tab = tabs.find((item) => item.url?.startsWith(targetUrl.split("/").slice(0, 3).join("/")) && !item.url.includes("preview.emergentagent.com"));
+      const tab = tabs.find((item) => item.url?.startsWith(targetUrl.split("/").slice(0, 3).join("/")) && !item.url.includes("localhost:3000"));
       if (!tab) throw new Error(`No source tab found for ${targetUrl}`);
       await chrome.tabs.update(tab.id, { active: true });
       await openCaptureFlow(tab);
@@ -51,7 +51,7 @@ for (const [name, url] of sites) {
     results.push({ name, url, ok: false, screenshot_bytes: 0, enriched: false, duration_ms: Date.now() - started, error: error.message });
   } finally {
     await page.close().catch(() => {});
-    for (const openPage of context.pages()) if (openPage.url().includes("preview.emergentagent.com/capture")) await openPage.close().catch(() => {});
+    for (const openPage of context.pages()) if (openPage.url().includes("localhost:3000/capture")) await openPage.close().catch(() => {});
   }
 }
 

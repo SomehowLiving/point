@@ -1,0 +1,5 @@
+# Paddle OCR fallback engine — Linux-only wheels, so these live outside requirements.txt
+# (see the note there). Installed only when the backend image is built with
+# --build-arg INSTALL_PADDLE=true; ocr_service.py degrades to Tesseract-only without them.
+paddlepaddle==3.2.2
+paddleocr>=3.0,<4

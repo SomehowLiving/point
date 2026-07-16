@@ -200,8 +200,12 @@ Responsibilities:
 | --- | --- | --- |
 | `MONGO_URL` | MongoDB connection string | Yes |
 | `DB_NAME` | MongoDB database name | Yes |
-| `EMERGENT_LLM_KEY` | Server-side AI provider key | Yes for AI |
 | `CORS_ORIGINS` | Allowed frontend origins | Yes |
+| `OPENAI_API_KEY` / `OPENAI_MODEL` | Server-side OpenAI key + model id (default `gpt-4o`), backs the `gpt-5.5` model option | Yes for that model |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | Server-side Gemini key + model id (default `gemini-2.0-flash`), backs the `gemini-3.1-pro-preview` model option | Yes for that model |
+| `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` | Server-side OpenRouter key + routed model id (default `openai/gpt-4o-mini`), backs the `openrouter` model option | Yes for that model |
+| `GROQ_API_KEY` / `GROQ_MODEL` | Server-side Groq key + model id (default `meta-llama/llama-4-scout-17b-16e-instruct`), backs the `groq` model option | Yes for that model |
+| `TESSERACT_CMD` | Explicit path to the Tesseract binary, used when it isn't on `PATH` | No |
 
 ### Frontend variables
 
@@ -558,10 +562,14 @@ This avoids provider-specific failures caused by unusual PNG chunks, palette mod
 
 ### Model routing
 
-| UI model | Provider | Backend model identifier |
+`openai`, `openrouter`, and `groq` all speak the OpenAI chat-completions wire format, so they share one streaming code path (`stream_openai_deltas`) and differ only by API key, base URL, and model id. `gemini` uses the Google `google-genai` SDK directly (`stream_gemini_deltas`).
+
+| UI model id | Provider | Real model (env-configurable) |
 | --- | --- | --- |
-| GPT-5.5 | OpenAI | `gpt-5.5` |
-| Gemini 3.1 Pro | Google | `gemini-3.1-pro-preview` |
+| `gpt-5.5` | OpenAI | `OPENAI_MODEL`, default `gpt-4o` |
+| `gemini-3.1-pro-preview` | Google | `GEMINI_MODEL`, default `gemini-2.0-flash` |
+| `openrouter` | OpenRouter | `OPENROUTER_MODEL`, default `openai/gpt-4o-mini` |
+| `groq` | Groq | `GROQ_MODEL`, default `meta-llama/llama-4-scout-17b-16e-instruct` |
 
 ### Context prompt
 

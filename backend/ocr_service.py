@@ -17,6 +17,9 @@ from pytesseract import Output
 logger = logging.getLogger(__name__)
 _paddle_lock = threading.Lock()
 
+if os.environ.get("TESSERACT_CMD"):
+    pytesseract.pytesseract.tesseract_cmd = os.environ["TESSERACT_CMD"]
+
 
 def _regions(image: Image.Image, regions: List[Dict[str, Any]]) -> List[Tuple[Image.Image, int, int, int]]:
     if not regions:

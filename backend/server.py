@@ -1,27 +1,28 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Query
 from dotenv import load_dotenv
+import os
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
+
+from fastapi import FastAPI, APIRouter, HTTPException, Query
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorClient
-import os
 import logging
 import base64
 import io
 import json
 import re
-from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Literal, Optional
 import uuid
 from datetime import datetime, timezone
-from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent, TextDelta, StreamDone
+from openai import AsyncOpenAI
 from PIL import Image
+import httpx
 from ocr_service import extract_ocr
 from export_service import render_export
-
-
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -36,8 +37,24 @@ api_router = APIRouter(prefix="/api")
 
 
 SUPPORTED_MODELS = {
-    "gpt-5.5": ("openai", "gpt-5.5"),
-    "gemini-3.1-pro-preview": ("gemini", "gemini-3.1-pro-preview"),
+    "gpt-5.5": ("openai", os.environ.get("OPENAI_MODEL", "gpt-4o")),
+    "gemini-3.1-pro-preview": ("gemini", os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")),
+    "openrouter": ("openrouter", os.environ.get("OPENROUTER_MODEL", "openai/gpt-4o-mini")),
+    "groq": ("groq", os.environ.get("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")),
+}
+PROVIDER_KEY_ENV = {
+    "openai": "OPENAI_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "groq": "GROQ_API_KEY",
+}
+# openai / openrouter / groq all speak the OpenAI chat-completions wire format; only the base
+# URL (and key/model) differs, so they share stream_openai_deltas below. None means the SDK's
+# own default (api.openai.com).
+OPENAI_COMPATIBLE_BASE_URLS = {
+    "openai": None,
+    "openrouter": "https://openrouter.ai/api/v1",
+    "groq": "https://api.groq.com/openai/v1",
 }
 SUPPORTED_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -52,11 +69,26 @@ class Region(BaseModel):
     label: Optional[str] = Field(default=None, max_length=80)
 
 
+class Point(BaseModel):
+    id: str
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    label: Optional[str] = Field(default=None, max_length=80)
+
+
+class SearchResult(BaseModel):
+    title: str = Field(default="", max_length=300)
+    url: str = Field(default="", max_length=2000)
+    snippet: str = Field(default="", max_length=500)
+    engine: str = Field(default="", max_length=60)
+
+
 class Annotation(BaseModel):
     id: str
-    type: Literal["freehand", "redaction", "label"]
+    type: Literal["freehand", "redaction", "label", "mask"]
     points: List[dict] = Field(default_factory=list, max_length=500)
     label: Optional[str] = Field(default=None, max_length=80)
+    edge: Optional[Literal["hard", "soft"]] = None
 
 
 class SourceContext(BaseModel):
@@ -97,6 +129,7 @@ class AnalyzeRequest(BaseModel):
     model: str = "gpt-5.5"
     regions: List[Region] = Field(default_factory=list, max_length=12)
     annotations: List[Annotation] = Field(default_factory=list, max_length=30)
+    points: List[Point] = Field(default_factory=list, max_length=12)
     source: SourceContext = Field(default_factory=SourceContext)
     private_mode: bool = False
     ocr_text: str = Field(default="", max_length=100000)
@@ -126,9 +159,11 @@ class Capture(BaseModel):
     result: str
     regions: List[Region]
     annotations: List[Annotation]
+    points: List[Point] = Field(default_factory=list)
     source: SourceContext
     thumbnail: str = ""
     ocr_text: str = ""
+    search_results: List[SearchResult] = Field(default_factory=list)
 
 
 def parse_image_data(image_data: str) -> bytes:
@@ -157,11 +192,13 @@ def canonical_image_base64(raw: bytes) -> str:
         raise HTTPException(status_code=400, detail="Image bytes could not be decoded") from exc
 
 
-def build_prompt(request: AnalyzeRequest) -> str:
+def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] = None) -> str:
     action_guides = {
         "copy": "Recover the requested text precisely, preserving layout. Return only copy-ready content.",
         "explain": "Explain the selected content clearly, grounding every claim in visible evidence.",
-        "search": "Identify the selected subject and produce specific search queries, likely official sources, and verification cues.",
+        "search": "Identify the selected subject. web_search_results below are REAL, retrieved results for an "
+                   "automatically-extracted query — cite specific titles/URLs from them, note which look like "
+                   "official sources, and say plainly if the results don't answer the question rather than guessing.",
         "translate": "Translate the selected content while preserving headings, lists, tables, and tone.",
         "summarize": "Summarize the selected content with key facts, decisions, and open questions.",
         "extract": "Extract the requested information into valid, concise JSON or a Markdown table when more appropriate.",
@@ -170,19 +207,60 @@ def build_prompt(request: AnalyzeRequest) -> str:
     }
     regions = [region.model_dump() for region in request.regions]
     annotations = [annotation.model_dump() for annotation in request.annotations]
+    points = [point.model_dump() for point in request.points]
     context = {
         "source": request.source.model_dump(),
         "regions_normalized_to_image": regions,
         "annotations": annotations,
+        "points_normalized_to_image": points,
         "deterministic_ocr": request.ocr_text,
+        "web_search_results": search_results or [],
     }
     return (
         "You are the Spatial AI Context Layer. Analyze the screenshot and prioritize only the user-marked regions. "
+        "Each entry in points_normalized_to_image marks one exact location the user pointed at (not an area) — "
+        "ground your answer specifically on what is at that coordinate. "
         "Redacted areas are intentionally unavailable and must never be inferred. "
         f"Task mode: {request.action}. {action_guides[request.action]}\n\n"
         f"User instruction: {request.instruction}\n\n"
         f"Structured context bundle:\n{json.dumps(context, ensure_ascii=False)}"
     )
+
+
+SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://localhost:8888")
+
+
+def extract_search_query(request: AnalyzeRequest) -> str:
+    # Deterministic MVP heuristic: deterministic OCR text (what's actually visible in the
+    # selection) makes a better query than the user's free-form instruction, when available.
+    # A smarter LLM-based query rewrite is a reasonable future refinement, not required for the
+    # core "make Search actually search" ask.
+    ocr_snippet = request.ocr_text.strip()
+    query = ocr_snippet if ocr_snippet else request.instruction.strip()
+    return " ".join(query.split())[:150]
+
+
+async def search_web(query: str, max_results: int = 6) -> List[dict]:
+    if not query:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=10) as http_client:
+            response = await http_client.get(f"{SEARXNG_URL}/search", params={"q": query, "format": "json"})
+            response.raise_for_status()
+            payload = response.json()
+    except Exception as exc:
+        logger.warning("SearXNG search failed for query %r: %s", query, exc)
+        return []
+    results = []
+    for item in payload.get("results", [])[:max_results]:
+        engines = item.get("engines") or ([item["engine"]] if item.get("engine") else [])
+        results.append({
+            "title": (item.get("title") or "")[:300],
+            "url": item.get("url") or "",
+            "snippet": (item.get("content") or "")[:500],
+            "engine": engines[0] if engines else "",
+        })
+    return results
 
 # Add your routes to the router instead of directly to app
 @api_router.get("/")
@@ -195,6 +273,8 @@ async def models():
         "models": [
             {"id": "gpt-5.5", "name": "GPT-5.5", "provider": "OpenAI"},
             {"id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro", "provider": "Google"},
+            {"id": "openrouter", "name": "OpenRouter", "provider": "OpenRouter"},
+            {"id": "groq", "name": "Groq", "provider": "Groq"},
         ]
     }
 
@@ -223,7 +303,7 @@ async def ocr_status():
     return {
         "default": "auto",
         "engines": [
-            {"id": "tesseract", "available": bool(shutil.which("tesseract")), "mode": "in-process"},
+            {"id": "tesseract", "available": bool(os.environ.get("TESSERACT_CMD") or shutil.which("tesseract")), "mode": "in-process"},
             {"id": "paddleocr", "available": bool(importlib.util.find_spec("paddleocr") and importlib.util.find_spec("paddle")), "mode": "isolated-worker"},
         ],
         "fallback_order": ["tesseract", "paddleocr", "tesseract"],
@@ -237,35 +317,75 @@ async def export_render(request: ExportRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+SYSTEM_MESSAGE = "You are a precise multimodal assistant for visual screen context. Never reveal hidden or redacted content."
+
+
+async def stream_openai_deltas(model_name: str, api_key: str, prompt: str, mime_type: str, image_payload: str, base_url: Optional[str] = None):
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    stream = await client.chat.completions.create(
+        model=model_name,
+        stream=True,
+        messages=[
+            {"role": "system", "content": SYSTEM_MESSAGE},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_payload}"}},
+                ],
+            },
+        ],
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta.content if chunk.choices else None
+        if delta:
+            yield delta
+
+
+async def stream_gemini_deltas(model_name: str, api_key: str, prompt: str, mime_type: str, image_payload: str):
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=api_key)
+    stream = await client.aio.models.generate_content_stream(
+        model=model_name,
+        contents=[
+            types.Part.from_bytes(data=base64.b64decode(image_payload), mime_type=mime_type),
+            prompt,
+        ],
+        config=types.GenerateContentConfig(system_instruction=SYSTEM_MESSAGE),
+    )
+    async for chunk in stream:
+        if chunk.text:
+            yield chunk.text
+
+
 @api_router.post("/captures/analyze")
 async def analyze_capture(request: AnalyzeRequest):
     raw_image = parse_image_data(request.image_data)
-    api_key = os.environ.get("EMERGENT_LLM_KEY")
+    provider, model_name = SUPPORTED_MODELS[request.model]
+    api_key = os.environ.get(PROVIDER_KEY_ENV[provider])
     if not api_key:
         raise HTTPException(status_code=503, detail="AI service is not configured")
 
-    provider, model_name = SUPPORTED_MODELS[request.model]
-    session_id = str(uuid.uuid4())
     image_payload = canonical_image_base64(raw_image)
 
     async def event_stream():
         collected = []
+        search_results: List[dict] = []
         try:
-            chat = LlmChat(
-                api_key=api_key,
-                session_id=session_id,
-                system_message="You are a precise multimodal assistant for visual screen context. Never reveal hidden or redacted content.",
-            ).with_model(provider, model_name)
-            message = UserMessage(
-                text=build_prompt(request),
-                file_contents=[ImageContent(image_base64=image_payload)],
+            if request.action == "search":
+                search_results = await search_web(extract_search_query(request))
+                yield f"data: {json.dumps({'type': 'search_results', 'results': search_results})}\n\n"
+            prompt = build_prompt(request, search_results)
+            deltas = (
+                stream_openai_deltas(model_name, api_key, prompt, "image/png", image_payload, base_url=OPENAI_COMPATIBLE_BASE_URLS[provider])
+                if provider in OPENAI_COMPATIBLE_BASE_URLS
+                else stream_gemini_deltas(model_name, api_key, prompt, "image/png", image_payload)
             )
-            async for event in chat.stream_message(message):
-                if isinstance(event, TextDelta):
-                    collected.append(event.content)
-                    yield f"data: {json.dumps({'type': 'delta', 'content': event.content})}\n\n"
-                elif isinstance(event, StreamDone):
-                    break
+            async for content in deltas:
+                collected.append(content)
+                yield f"data: {json.dumps({'type': 'delta', 'content': content})}\n\n"
 
             result = "".join(collected).strip()
             capture_id = str(uuid.uuid4())
@@ -279,9 +399,11 @@ async def analyze_capture(request: AnalyzeRequest):
                 "result": result,
                 "regions": [region.model_dump() for region in request.regions],
                 "annotations": [annotation.model_dump() for annotation in request.annotations],
+                "points": [point.model_dump() for point in request.points],
                 "source": request.source.model_dump(),
                 "thumbnail": "" if request.private_mode else f"data:{request.mime_type};base64,{image_payload}",
                 "ocr_text": request.ocr_text,
+                "search_results": search_results,
             }
             if not request.private_mode:
                 await db.captures.insert_one(dict(capture_payload))

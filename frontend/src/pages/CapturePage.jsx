@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle, Clipboard, Cursor, Desktop, EyeSlash, Monitor, PencilSimple, Scan, ShieldCheck, Trash, UploadSimple } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowCounterClockwise, ArrowsOutSimple, CheckCircle, Clipboard, Cursor, Desktop, EyeSlash, Hand, Lasso, MagnifyingGlassMinus, MagnifyingGlassPlus, MapPin, Monitor, PencilSimple, Scan, ShieldCheck, Trash, UploadSimple } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import { CaptureCanvas } from "@/components/CaptureCanvas";
 import { CommandBar } from "@/components/CommandBar";
@@ -7,8 +7,10 @@ import { analyzeCapture, extractOcr } from "@/lib/api";
 import { captureNative, isNativeShell, listenForNativeCapture, writeClipboard } from "@/lib/native";
 import { ExportBar } from "@/components/ExportBar";
 import { Switch } from "@/components/ui/switch";
+import { orderedRegions, reorderBefore } from "@/lib/regionOrder";
 
 const accepted = ["image/png", "image/jpeg", "image/webp"];
+const DEFAULT_VIEWPORT = { scale: 1, translateX: 0, translateY: 0 };
 
 async function applyRedactions(imageData, mimeType, annotations) {
   const redactions = annotations.filter((item) => item.type === "redaction");
@@ -30,12 +32,100 @@ async function applyRedactions(imageData, mimeType, annotations) {
   return canvas.toDataURL(mimeType, 0.92);
 }
 
+function RegionList({ regions, onReorder }) {
+  const [draggingId, setDraggingId] = useState(null);
+  const [overId, setOverId] = useState(null);
+  if (regions.length < 2) return null;
+  return (
+    <div className="region-list-panel" data-testid="region-list-panel">
+      <h4>Regions</h4>
+      {regions.map((region, index) => (
+        <div key={region.id}>
+          {overId === region.id && draggingId && draggingId !== region.id && <div className="region-list-drop-indicator" data-testid="region-list-drop-indicator" />}
+          <div
+            className={`region-list-item ${draggingId === region.id ? "dragging" : ""}`}
+            draggable
+            tabIndex={0}
+            data-testid={`region-list-item-${index}`}
+            onDragStart={() => setDraggingId(region.id)}
+            onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); setOverId(region.id); }}
+            onDrop={(event) => { event.preventDefault(); event.stopPropagation(); if (draggingId && draggingId !== region.id) onReorder(draggingId, region.id); setDraggingId(null); setOverId(null); }}
+            onDragEnd={() => { setDraggingId(null); setOverId(null); }}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowUp" && index > 0) { event.preventDefault(); onReorder(region.id, regions[index - 1].id); }
+              else if (event.key === "ArrowDown" && index < regions.length - 1) { event.preventDefault(); onReorder(region.id, regions[index + 2]?.id ?? null); }
+            }}
+          >
+            <span className="drag-handle">⋮⋮</span>
+            <span>{String(index + 1).padStart(2, "0")} {region.label || ""}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function CapturePage() {
   const [image, setImage] = useState(""); const [mimeType, setMimeType] = useState("image/png");
   const [regions, setRegions] = useState([]); const [annotations, setAnnotations] = useState([]);
+  const [points, setPoints] = useState([]);
+  const [regionOrder, setRegionOrder] = useState([]);
+  // Viewport (zoom/pan) is navigation state, not a document edit — deliberately kept OUT of the
+  // undo/redo history stack below. Annotation undo/redo must never move the camera, and zoom/pan
+  // must never be undoable as if it were a drawn region.
+  const [viewport, setViewport] = useState(DEFAULT_VIEWPORT);
+  const canvasRef = useRef(null);
+  const [history, setHistory] = useState({ past: [], future: [] });
+  const snapshot = useCallback(() => ({ regions, annotations, points, regionOrder }), [regions, annotations, points, regionOrder]);
+  const resetRegionState = () => { setRegions([]); setAnnotations([]); setPoints([]); setRegionOrder([]); setHistory({ past: [], future: [] }); };
+  const setRegionsTracked = (next) => { setHistory((current) => ({ past: [...current.past, snapshot()], future: [] })); setRegions(next); };
+  const setAnnotationsTracked = (next) => { setHistory((current) => ({ past: [...current.past, snapshot()], future: [] })); setAnnotations(next); };
+  const setPointsTracked = (next) => { setHistory((current) => ({ past: [...current.past, snapshot()], future: [] })); setPoints(next); };
+  const reorderRegionsTracked = (draggedId, beforeId) => {
+    const next = reorderBefore(regions, regionOrder, draggedId, beforeId);
+    setHistory((current) => ({ past: [...current.past, snapshot()], future: [] }));
+    setRegionOrder(next);
+  };
+  // Confirming a lasso mask changes both annotations (the polygon) and regions (its derived
+  // bounding box) together — pushed as ONE history entry so a single undo reverts the whole
+  // "confirm selection" action, not just half of it.
+  const commitMask = (maskAnnotation, region) => {
+    setHistory((current) => ({ past: [...current.past, snapshot()], future: [] }));
+    setAnnotations([...annotations, maskAnnotation]);
+    setRegions([...regions, region]);
+  };
+  const undo = useCallback(() => {
+    if (!history.past.length) return;
+    const previous = history.past[history.past.length - 1];
+    setHistory({ past: history.past.slice(0, -1), future: [snapshot(), ...history.future] });
+    setRegions(previous.regions);
+    setAnnotations(previous.annotations);
+    setPoints(previous.points);
+    setRegionOrder(previous.regionOrder || []);
+  }, [history, snapshot]);
+  const redo = useCallback(() => {
+    if (!history.future.length) return;
+    const next = history.future[0];
+    setHistory({ past: [...history.past, snapshot()], future: history.future.slice(1) });
+    setRegions(next.regions);
+    setAnnotations(next.annotations);
+    setPoints(next.points);
+    setRegionOrder(next.regionOrder || []);
+  }, [history, snapshot]);
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z") return;
+      if (event.target.tagName === "INPUT" || event.target.tagName === "TEXTAREA") return;
+      event.preventDefault();
+      if (event.shiftKey) redo(); else undo();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [undo, redo]);
   const [tool, setTool] = useState("region"); const [action, setAction] = useState("explain");
   const [command, setCommand] = useState("Explain what matters in this selection"); const [model, setModel] = useState("gpt-5.5");
   const [privateMode, setPrivateMode] = useState(false); const [processing, setProcessing] = useState(false); const [result, setResult] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
   const [source, setSource] = useState({ application:"Web dashboard", window_title:document.title, url:window.location.href });
   const [ocr, setOcr] = useState(null); const [ocrLoading, setOcrLoading] = useState(false); const nativeShell = isNativeShell();
   const fileRef = useRef(null);
@@ -43,7 +133,7 @@ export default function CapturePage() {
     if (!file || !accepted.includes(file.type)) return toast.error("Use a PNG, JPEG, or WEBP image");
     if (file.size > 8 * 1024 * 1024) return toast.error("Image must be smaller than 8 MB");
     const reader = new FileReader();
-    reader.onload = () => { setImage(reader.result); setMimeType(file.type); setRegions([]); setAnnotations([]); setResult(""); setOcr(null); };
+    reader.onload = () => { setImage(reader.result); setMimeType(file.type); resetRegionState(); setViewport(DEFAULT_VIEWPORT); setResult(""); setSearchResults([]); setOcr(null); };
     reader.readAsDataURL(file);
   }, []);
   useEffect(() => {
@@ -56,17 +146,17 @@ export default function CapturePage() {
       const payload = event.data.payload;
       if (!payload?.screenshot) return;
       setImage(payload.screenshot); setMimeType("image/png"); setSource(payload.source || source);
-      setRegions([]); setAnnotations([]); setResult(""); toast.success("Browser tab captured with page context");
+      resetRegionState(); setViewport(DEFAULT_VIEWPORT); setResult(""); setSearchResults([]); toast.success("Browser tab captured with page context");
     };
     window.addEventListener("message", receiveExtensionCapture);
     return () => window.removeEventListener("message", receiveExtensionCapture);
   }, [source]);
   useEffect(() => {
     let stop = () => {};
-    listenForNativeCapture((payload) => { setImage(payload.screenshot);setMimeType(payload.mime_type||"image/png");setSource(payload.source);setRegions([]);setAnnotations([]);setResult("");setOcr(null);toast.success("Windows display captured"); }).then((unlisten)=>{stop=unlisten;});
+    listenForNativeCapture((payload) => { setImage(payload.screenshot);setMimeType(payload.mime_type||"image/png");setSource(payload.source);resetRegionState();setViewport(DEFAULT_VIEWPORT);setResult("");setSearchResults([]);setOcr(null);toast.success("Windows display captured"); }).then((unlisten)=>{stop=unlisten;});
     return () => stop();
   }, []);
-  const runNativeCapture = async (mode) => { try { const payload=await captureNative(mode);setImage(payload.screenshot);setMimeType(payload.mime_type);setSource(payload.source);setRegions([]);setAnnotations([]);setResult("");setOcr(null);toast.success(mode==="all"?"All displays captured":"Active display captured"); } catch(error){toast.error(error.message);} };
+  const runNativeCapture = async (mode) => { try { const payload=await captureNative(mode);setImage(payload.screenshot);setMimeType(payload.mime_type);setSource(payload.source);resetRegionState();setViewport(DEFAULT_VIEWPORT);setResult("");setSearchResults([]);setOcr(null);toast.success(mode==="all"?"All displays captured":"Active display captured"); } catch(error){toast.error(error.message);} };
   const runOcr = async () => {
     if(!image)return toast.error("Add a screenshot first");setOcrLoading(true);
     try{const protectedImage=await applyRedactions(image,mimeType,annotations);const data=await extractOcr({image_data:protectedImage,mime_type:mimeType,engine:"auto",language:"eng",regions});setOcr(data);toast.success(`OCR complete · ${data.engine}`);}catch(error){toast.error(error.message);}finally{setOcrLoading(false);}
@@ -74,19 +164,30 @@ export default function CapturePage() {
   const runAnalysis = async () => {
     if (!image) return toast.error("Add a screenshot first");
     if (!command.trim()) return toast.error("Give Spatial AI an instruction");
-    setProcessing(true); setResult("");
+    setProcessing(true); setResult(""); setSearchResults([]);
     try {
       const protectedImage = await applyRedactions(image, mimeType, annotations);
-      const completed = await analyzeCapture({ image_data:protectedImage, mime_type:mimeType, instruction:command.trim(), action, model, regions, annotations, private_mode:privateMode, source, ocr_text:ocr?.text||"" }, (delta) => setResult((current) => current + delta));
+      const completed = await analyzeCapture({ image_data:protectedImage, mime_type:mimeType, instruction:command.trim(), action, model, regions, annotations, points, private_mode:privateMode, source, ocr_text:ocr?.text||"" }, (delta) => setResult((current) => current + delta), (results) => setSearchResults(results || []));
       toast.success(completed?.saved ? "Analysis saved to history" : "Private analysis complete");
     } catch (error) { toast.error(error.message); } finally { setProcessing(false); }
   };
   const copyResult = async () => { await writeClipboard(result); toast.success("Result copied"); };
-  const tools = [{ id:"region",label:"Select region",icon:Cursor },{ id:"freehand",label:"Draw",icon:PencilSimple },{ id:"redaction",label:"Redact",icon:EyeSlash }];
+  const tools = [{ id:"region",label:"Select region",icon:Cursor },{ id:"point",label:"Point",icon:MapPin },{ id:"lasso",label:"Lasso",icon:Lasso },{ id:"freehand",label:"Draw",icon:PencilSimple },{ id:"redaction",label:"Redact",icon:EyeSlash },{ id:"pan",label:"Pan",icon:Hand }];
+  const displayRegions = orderedRegions(regions, regionOrder);
   return <section className="capture-page" data-testid="capture-workspace">
-    <div className="capture-toolbar" data-testid="capture-toolbar"><div className="tool-group">{tools.map(({ id,label,icon:Icon }) => <button key={id} className={tool === id ? "active" : ""} onClick={() => setTool(id)} data-testid={`canvas-tool-${id}-button`} title={label}><Icon /><span>{label}</span></button>)}<button onClick={runOcr} disabled={ocrLoading||!image} data-testid="run-ocr-button"><Scan /><span>{ocrLoading?"Reading…":"OCR"}</span></button></div><div className="toolbar-actions">{nativeShell&&<><button onClick={()=>runNativeCapture("active")} data-testid="capture-active-display-button"><Desktop />Active display</button><button onClick={()=>runNativeCapture("all")} data-testid="capture-all-displays-button"><Monitor />All displays</button></>}<label className="private-toggle" data-testid="private-mode-control"><ShieldCheck /><span>Temporary</span><Switch checked={privateMode} onCheckedChange={setPrivateMode} data-testid="private-mode-switch" /></label><button onClick={() => fileRef.current?.click()} data-testid="upload-screenshot-button"><UploadSimple />Open image</button><button className="icon-only" onClick={() => { setImage("");setRegions([]);setAnnotations([]);setResult("");setOcr(null); }} data-testid="clear-capture-button" aria-label="Clear capture"><Trash /></button><input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => loadFile(event.target.files?.[0])} data-testid="screenshot-file-input" hidden /></div></div>
-    <div className="workspace-grid"><div className="canvas-panel" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault();loadFile(event.dataTransfer.files?.[0]); }} data-testid="screenshot-drop-zone"><div className="canvas-meta"><span data-testid="region-count">{regions.length} region{regions.length === 1 ? "" : "s"}</span><span data-testid="annotation-count">{annotations.length} mark{annotations.length === 1 ? "" : "s"}</span></div><CaptureCanvas {...{ image,regions,setRegions,annotations,setAnnotations,tool,processing }} /><CommandBar {...{ action,setAction,command,setCommand,model,setModel,onSubmit:runAnalysis,disabled:processing || !image,processing }} /></div>
-      <aside className="result-panel" data-testid="analysis-result-panel"><div className="result-header"><div><span className="eyebrow">{ocr&&!result?"Deterministic OCR":"AI output"}</span><h2 data-testid="analysis-result-title">{ocr&&!result?"Structured extraction":"Grounded result"}</h2></div>{result && <button onClick={copyResult} data-testid="copy-result-button" aria-label="Copy result"><Clipboard /></button>}</div>{(processing||ocrLoading)&&!result&&!ocr&&<div className="result-loading" data-testid="analysis-loading-state"><i /><i /><i /><span>{ocrLoading?"Recovering text":"Reading selected context"}</span></div>}{result?<div className="result-content" data-testid="analysis-result-content">{result}</div>:ocr?<div className="ocr-result" data-testid="ocr-result"><div className="ocr-stats"><span data-testid="ocr-engine">{ocr.engine}</span><span data-testid="ocr-confidence">{Math.round(ocr.average_confidence*100)}% confidence</span><span data-testid="ocr-word-count">{ocr.words.length} words</span></div><pre data-testid="ocr-text-content">{ocr.text||"No text detected"}</pre><ExportBar payload={ocr} source={source} /></div>:!processing&&!ocrLoading&&<div className="result-empty" data-testid="analysis-empty-state"><CheckCircle weight="thin" /><p>Your answer will stay anchored to the regions you point at.</p></div>}<div className="context-bundle" data-testid="context-bundle-summary"><span>CONTEXT BUNDLE</span><code>{`{ image, regions: ${regions.length}, marks: ${annotations.length}, ocr: ${ocr?.words?.length||0}, private: ${privateMode} }`}</code></div></aside>
+    <div className="capture-toolbar" data-testid="capture-toolbar"><div className="tool-group">{tools.map(({ id,label,icon:Icon }) => <button key={id} className={tool === id ? "active" : ""} onClick={() => setTool(id)} data-testid={`canvas-tool-${id}-button`} title={label}><Icon /><span>{label}</span></button>)}<button onClick={runOcr} disabled={ocrLoading||!image} data-testid="run-ocr-button"><Scan /><span>{ocrLoading?"Reading…":"OCR"}</span></button><button className="icon-only" onClick={undo} disabled={!history.past.length} data-testid="undo-button" aria-label="Undo" title="Undo (Ctrl+Z)"><ArrowCounterClockwise /></button><button className="icon-only" onClick={redo} disabled={!history.future.length} data-testid="redo-button" aria-label="Redo" title="Redo (Ctrl+Shift+Z)"><ArrowClockwise /></button></div><div className="toolbar-actions">{nativeShell&&<><button onClick={()=>runNativeCapture("active")} data-testid="capture-active-display-button"><Desktop />Active display</button><button onClick={()=>runNativeCapture("all")} data-testid="capture-all-displays-button"><Monitor />All displays</button></>}<label className="private-toggle" data-testid="private-mode-control"><ShieldCheck /><span>Temporary</span><Switch checked={privateMode} onCheckedChange={setPrivateMode} data-testid="private-mode-switch" /></label><button onClick={() => fileRef.current?.click()} data-testid="upload-screenshot-button"><UploadSimple />Open image</button><button className="icon-only" onClick={() => { setImage("");resetRegionState();setViewport(DEFAULT_VIEWPORT);setResult("");setSearchResults([]);setOcr(null); }} data-testid="clear-capture-button" aria-label="Clear capture"><Trash /></button><input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => loadFile(event.target.files?.[0])} data-testid="screenshot-file-input" hidden /></div></div>
+    <div className="workspace-grid"><div className="canvas-panel" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault();loadFile(event.dataTransfer.files?.[0]); }} data-testid="screenshot-drop-zone"><div className="canvas-meta"><span data-testid="region-count">{regions.length} region{regions.length === 1 ? "" : "s"}</span><span data-testid="point-count">{points.length} point{points.length === 1 ? "" : "s"}</span><span data-testid="annotation-count">{annotations.length} mark{annotations.length === 1 ? "" : "s"}</span></div>
+      <RegionList regions={displayRegions} onReorder={reorderRegionsTracked} />
+      <CaptureCanvas ref={canvasRef} {...{ image,regions:displayRegions,setRegions:setRegionsTracked,annotations,setAnnotations:setAnnotationsTracked,points,setPoints:setPointsTracked,commitMask,tool,processing,ocr,viewport,setViewport }} />
+      <div className="zoom-controls" data-testid="zoom-controls">
+        <button onClick={() => canvasRef.current?.zoomOut()} disabled={!image} aria-label="Zoom out" title="Zoom out" data-testid="zoom-out-button"><MagnifyingGlassMinus /></button>
+        <span className="zoom-percentage" data-testid="zoom-percentage">{Math.round(viewport.scale * 100)}%</span>
+        <button onClick={() => canvasRef.current?.zoomIn()} disabled={!image} aria-label="Zoom in" title="Zoom in" data-testid="zoom-in-button"><MagnifyingGlassPlus /></button>
+        <button onClick={() => canvasRef.current?.zoomToFit()} disabled={!image} aria-label="Fit to screen" title="Fit to screen" data-testid="zoom-fit-button"><ArrowsOutSimple /></button>
+        <button onClick={() => canvasRef.current?.resetZoom()} disabled={!image} aria-label="Reset to 100%" title="Reset to 100%" data-testid="zoom-reset-button">100%</button>
+      </div>
+      <CommandBar {...{ action,setAction,command,setCommand,model,setModel,onSubmit:runAnalysis,disabled:processing || !image,processing }} /></div>
+      <aside className="result-panel" data-testid="analysis-result-panel"><div className="result-header"><div><span className="eyebrow">{ocr&&!result?"Deterministic OCR":"AI output"}</span><h2 data-testid="analysis-result-title">{ocr&&!result?"Structured extraction":"Grounded result"}</h2></div>{result && <button onClick={copyResult} data-testid="copy-result-button" aria-label="Copy result"><Clipboard /></button>}</div>{(processing||ocrLoading)&&!result&&!ocr&&<div className="result-loading" data-testid="analysis-loading-state"><i /><i /><i /><span>{ocrLoading?"Recovering text":"Reading selected context"}</span></div>}{result?<><div className="result-content" data-testid="analysis-result-content">{result}</div>{searchResults.length>0&&<div className="search-sources" data-testid="search-sources"><span className="sources-label">Sources</span>{searchResults.map((item,index)=><a key={index} href={item.url} target="_blank" rel="noreferrer" className="source-item" data-testid={`source-item-${index}`}><span className="source-title">{item.title||item.url}</span><span className="source-url">{item.url}</span>{item.snippet&&<span className="source-snippet">{item.snippet}</span>}</a>)}</div>}</>:ocr?<div className="ocr-result" data-testid="ocr-result"><div className="ocr-stats"><span data-testid="ocr-engine">{ocr.engine}</span><span data-testid="ocr-confidence">{Math.round(ocr.average_confidence*100)}% confidence</span><span data-testid="ocr-word-count">{ocr.words.length} words</span></div><pre data-testid="ocr-text-content">{ocr.text||"No text detected"}</pre><ExportBar payload={ocr} source={source} /></div>:!processing&&!ocrLoading&&<div className="result-empty" data-testid="analysis-empty-state"><CheckCircle weight="thin" /><p>Your answer will stay anchored to the regions you point at.</p></div>}<div className="context-bundle" data-testid="context-bundle-summary"><span>CONTEXT BUNDLE</span><code>{`{ image, regions: ${regions.length}, points: ${points.length}, marks: ${annotations.length}, ocr: ${ocr?.words?.length||0}, private: ${privateMode} }`}</code></div></aside>
     </div>
   </section>;
 }

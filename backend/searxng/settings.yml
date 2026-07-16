@@ -1,0 +1,16 @@
+# Read the documentation before extending the defaults:
+# https://docs.searxng.org/admin/settings/
+
+use_default_settings: true
+
+server:
+  secret_key: "Km7vPUcuWErklLGbvAaSoDL4C1S8QR"
+  image_proxy: true
+  # JSON is disabled by default (public instances shouldn't expose a scrapeable API without
+  # rate limiting) — this instance is bound to localhost only, for our own backend to call.
+  limiter: false
+
+search:
+  formats:
+    - html
+    - json

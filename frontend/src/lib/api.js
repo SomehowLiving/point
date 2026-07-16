@@ -1,6 +1,6 @@
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
-export async function analyzeCapture(payload, onDelta) {
+export async function analyzeCapture(payload, onDelta, onSearchResults) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 150000);
   const response = await fetch(`${API}/captures/analyze`, {
@@ -22,6 +22,7 @@ export async function analyzeCapture(payload, onDelta) {
       if (!line) return;
       const event = JSON.parse(line.slice(6));
       if (event.type === "delta") onDelta(event.content);
+      if (event.type === "search_results") onSearchResults?.(event.results);
       if (event.type === "done") completed = event;
       if (event.type === "error") throw new Error(event.message);
   };

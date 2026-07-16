@@ -1,4 +1,4 @@
-const DEFAULT_DASHBOARD_URL = "https://screen-pointer.internal.preview.emergentagent.com/capture";
+const DEFAULT_DASHBOARD_URL = "http://localhost:3000/capture";
 
 async function collectPageContext(tab) {
   if (!tab?.id || !tab.url?.startsWith("http")) return {};
