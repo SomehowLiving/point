@@ -221,6 +221,57 @@ def _extract_action_guide(schema: str) -> str:
     )
 
 
+def _rect_overlap_area(a: dict, b: dict) -> float:
+    left = max(a.get("x", 0), b.get("x", 0))
+    top = max(a.get("y", 0), b.get("y", 0))
+    right = min(a.get("x", 0) + a.get("width", 0), b.get("x", 0) + b.get("width", 0))
+    bottom = min(a.get("y", 0) + a.get("height", 0), b.get("y", 0) + b.get("height", 0))
+    if right <= left or bottom <= top:
+        return 0.0
+    return (right - left) * (bottom - top)
+
+
+def _compact_dom_element(element: dict) -> dict:
+    return {key: element[key] for key in ("tag", "role", "text", "href") if element.get(key)}
+
+
+def _dom_elements_for_region(dom_elements: List[dict], region: dict, limit: int = 5) -> List[dict]:
+    scored = [(overlap, element) for element in dom_elements if (overlap := _rect_overlap_area(region, element.get("box") or {})) > 0]
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [_compact_dom_element(element) for _, element in scored[:limit]]
+
+
+def _dom_elements_for_point(dom_elements: List[dict], point: dict, limit: int = 3) -> List[dict]:
+    px, py = point.get("x", 0), point.get("y", 0)
+    scored = []
+    for element in dom_elements:
+        box = element.get("box") or {}
+        bx, by, bw, bh = box.get("x", 0), box.get("y", 0), box.get("width", 0), box.get("height", 0)
+        inside = bx <= px <= bx + bw and by <= py <= by + bh
+        center_x, center_y = bx + bw / 2, by + bh / 2
+        distance = ((px - center_x) ** 2 + (py - center_y) ** 2) ** 0.5
+        scored.append((0 if inside else 1, distance, element))
+    scored.sort(key=lambda triple: (triple[0], triple[1]))
+    return [_compact_dom_element(element) for _, _, element in scored[:limit]]
+
+
+def _selected_dom_elements(request: "AnalyzeRequest") -> dict:
+    page_context = request.source.page_context or {}
+    dom_elements = page_context.get("dom_elements")
+    if not isinstance(dom_elements, list) or not dom_elements:
+        return {"regions": [], "points": []}
+    return {
+        "regions": [
+            {"region_id": region.id, "elements": _dom_elements_for_region(dom_elements, region.model_dump())}
+            for region in request.regions
+        ],
+        "points": [
+            {"point_id": point.id, "elements": _dom_elements_for_point(dom_elements, point.model_dump())}
+            for point in request.points
+        ],
+    }
+
+
 def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] = None) -> str:
     action_guides = {
         "copy": "Recover the requested text precisely, preserving layout. Return only copy-ready content.",
@@ -237,19 +288,30 @@ def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] =
     regions = [region.model_dump() for region in request.regions]
     annotations = [annotation.model_dump() for annotation in request.annotations]
     points = [point.model_dump() for point in request.points]
+    selected_dom_elements = _selected_dom_elements(request)
     context = {
         "source": request.source.model_dump(),
         "regions_normalized_to_image": regions,
         "annotations": annotations,
         "points_normalized_to_image": points,
+        "selected_dom_elements": selected_dom_elements,
         "deterministic_ocr": request.ocr_text,
         "web_search_results": search_results or [],
     }
+    dom_note = (
+        "selected_dom_elements maps each region_id/point_id to the REAL DOM element(s) (tag, role, text, href) "
+        "under it, captured by the browser extension at screenshot time — this is ground truth about the browser "
+        "content, not a visual guess, and should be preferred over inferring an element's identity from pixels alone. "
+        "It is only present for browser-extension captures; treat it as absent (not a signal) otherwise.\n"
+        if selected_dom_elements["regions"] or selected_dom_elements["points"]
+        else ""
+    )
     return (
         "You are the Spatial AI Context Layer. Analyze the screenshot and prioritize only the user-marked regions. "
         "Each entry in points_normalized_to_image marks one exact location the user pointed at (not an area) — "
         "ground your answer specifically on what is at that coordinate. "
         "Redacted areas are intentionally unavailable and must never be inferred. "
+        f"{dom_note}"
         f"Task mode: {request.action}. {action_guides[request.action]}\n\n"
         f"User instruction: {request.instruction}\n\n"
         f"Structured context bundle:\n{json.dumps(context, ensure_ascii=False)}"

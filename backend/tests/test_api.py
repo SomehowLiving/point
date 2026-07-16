@@ -594,6 +594,84 @@ def test_extract_action_with_schema_streams_successfully():
     assert done is not None
 
 
+def test_build_prompt_matches_region_to_overlapping_dom_element():
+    from server import build_prompt, AnalyzeRequest
+
+    request = AnalyzeRequest(
+        image_data=SAMPLE_IMAGE_DATA_URL,
+        mime_type="image/png",
+        instruction="what is this button",
+        action="ask",
+        model="gpt-5.5",
+        regions=[{"id": "r1", "x": 0.1, "y": 0.1, "width": 0.2, "height": 0.1, "label": ""}],
+        source={
+            "application": "Google Chrome",
+            "window_title": "Test",
+            "url": "https://example.test",
+            "page_context": {
+                "dom_elements": [
+                    {"tag": "button", "role": None, "text": "Buy now", "href": None, "box": {"x": 0.12, "y": 0.11, "width": 0.1, "height": 0.05}},
+                    {"tag": "a", "role": None, "text": "Unrelated link", "href": "https://example.test/x", "box": {"x": 0.8, "y": 0.8, "width": 0.1, "height": 0.05}},
+                ]
+            },
+        },
+    )
+    prompt = build_prompt(request)
+    context = json.loads(prompt.split("Structured context bundle:\n", 1)[1])
+    matched = context["selected_dom_elements"]["regions"]
+    assert len(matched) == 1
+    assert matched[0]["region_id"] == "r1"
+    assert matched[0]["elements"] == [{"tag": "button", "text": "Buy now"}]
+    assert "ground truth" in prompt
+
+
+def test_build_prompt_matches_point_to_nearest_dom_element():
+    from server import build_prompt, AnalyzeRequest
+
+    request = AnalyzeRequest(
+        image_data=SAMPLE_IMAGE_DATA_URL,
+        mime_type="image/png",
+        instruction="what is at this point",
+        action="ask",
+        model="gpt-5.5",
+        points=[{"id": "p1", "x": 0.15, "y": 0.15, "label": None}],
+        source={
+            "application": "Google Chrome",
+            "window_title": "Test",
+            "url": "https://example.test",
+            "page_context": {
+                "dom_elements": [
+                    {"tag": "button", "role": None, "text": "Buy now", "href": None, "box": {"x": 0.1, "y": 0.1, "width": 0.1, "height": 0.1}},
+                    {"tag": "a", "role": None, "text": "Far away", "href": "https://example.test/x", "box": {"x": 0.9, "y": 0.9, "width": 0.05, "height": 0.05}},
+                ]
+            },
+        },
+    )
+    prompt = build_prompt(request)
+    context = json.loads(prompt.split("Structured context bundle:\n", 1)[1])
+    matched = context["selected_dom_elements"]["points"]
+    assert matched[0]["point_id"] == "p1"
+    assert matched[0]["elements"][0]["text"] == "Buy now"
+
+
+def test_build_prompt_omits_dom_ground_truth_note_when_no_dom_elements_present():
+    from server import build_prompt, AnalyzeRequest
+
+    request = AnalyzeRequest(
+        image_data=SAMPLE_IMAGE_DATA_URL,
+        mime_type="image/png",
+        instruction="explain this",
+        action="ask",
+        model="gpt-5.5",
+        regions=[{"id": "r1", "x": 0.1, "y": 0.1, "width": 0.2, "height": 0.1, "label": ""}],
+        source={"application": "Windows desktop", "window_title": "Notepad", "url": ""},
+    )
+    prompt = build_prompt(request)
+    assert "ground truth" not in prompt
+    context = json.loads(prompt.split("Structured context bundle:\n", 1)[1])
+    assert context["selected_dom_elements"] == {"regions": [], "points": []}
+
+
 def _searxng_reachable() -> bool:
     searxng_url = os.environ.get("SEARXNG_URL", "http://localhost:8888")
     try:

@@ -1,5 +1,6 @@
 import { chromium } from "../../frontend/node_modules/playwright/index.mjs";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
@@ -15,9 +16,25 @@ const sites = [
   ["threejs", "https://threejs.org/examples/"],
 ];
 
-const profilePath = "/tmp/spatial-extension-profile";
+// Chrome-family binary, checked in priority order: real Chrome (matches production more closely)
+// on both Windows and Linux, then Playwright's bundled Chromium as a fallback that works anywhere
+// without a separate Chrome install.
+function findChromeExecutable() {
+  const candidates = [
+    process.env.CHROME_PATH,
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+  ].filter(Boolean);
+  for (const candidate of candidates) if (fs.existsSync(candidate)) return candidate;
+  return chromium.executablePath();
+}
+
+const chromeExecutable = findChromeExecutable();
+const profilePath = path.join(os.tmpdir(), "spatial-extension-profile");
 fs.rmSync(profilePath, { recursive: true, force: true });
-const chrome = spawn("/usr/bin/google-chrome", ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--disable-breakpad", "--disable-crash-reporter", `--user-data-dir=${profilePath}`, `--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`, "--remote-debugging-port=9223", "about:blank"], { stdio: "ignore" });
+const chrome = spawn(chromeExecutable, ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--disable-breakpad", "--disable-crash-reporter", `--user-data-dir=${profilePath}`, `--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`, "--remote-debugging-port=9223", "about:blank"], { stdio: "ignore" });
 let browser;
 for (let attempt = 0; attempt < 40; attempt += 1) {
   try { browser = await chromium.connectOverCDP("http://127.0.0.1:9223"); break; } catch { await new Promise((resolve) => setTimeout(resolve, 250)); }
@@ -25,8 +42,24 @@ for (let attempt = 0; attempt < 40; attempt += 1) {
 if (!browser) throw new Error("Chrome DevTools connection did not start");
 const context = browser.contexts()[0];
 
-let worker = context.serviceWorkers()[0];
-if (!worker) worker = await context.waitForEvent("serviceworker", { timeout: 20000 });
+// Chrome ships several built-in component extensions (e.g. "Google Hangouts") that also register
+// service workers in a fresh profile — grabbing serviceWorkers()[0] blindly can pick one of those
+// instead of ours, silently losing the "tabs"/host permissions ours declares (url/title come back
+// undefined from chrome.tabs.query as a result). Identify ours by manifest name instead.
+async function findOurWorker() {
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    for (const candidate of context.serviceWorkers()) {
+      try {
+        const name = await candidate.evaluate(() => chrome.runtime.getManifest().name);
+        if (name === "Spatial AI Context Layer") return candidate;
+      } catch { /* worker may have been torn down mid-check; keep looking */ }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error("Spatial AI Context Layer service worker never appeared");
+}
+const worker = await findOurWorker();
 const results = [];
 
 for (const [name, url] of sites) {
@@ -46,7 +79,20 @@ for (const [name, url] of sites) {
     }, url);
     const status = result.lastCaptureStatus || {};
     const pending = result.pendingCapture || {};
-    results.push({ name, url, title, ok: status.ok === true, screenshot_bytes: status.bytes || 0, enriched: status.enriched === true, page_context_bytes: JSON.stringify(pending.source?.page_context || {}).length, duration_ms: Date.now() - started, error: status.error || "" });
+    const domElements = pending.source?.page_context?.dom_elements || [];
+    results.push({
+      name,
+      url,
+      title,
+      ok: status.ok === true,
+      screenshot_bytes: status.bytes || 0,
+      enriched: status.enriched === true,
+      page_context_bytes: JSON.stringify(pending.source?.page_context || {}).length,
+      dom_elements_count: domElements.length,
+      dom_elements_sample: domElements.slice(0, 3).map((element) => ({ tag: element.tag, text: element.text?.slice(0, 40) })),
+      duration_ms: Date.now() - started,
+      error: status.error || "",
+    });
   } catch (error) {
     results.push({ name, url, ok: false, screenshot_bytes: 0, enriched: false, duration_ms: Date.now() - started, error: error.message });
   } finally {
