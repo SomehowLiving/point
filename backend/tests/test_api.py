@@ -531,6 +531,69 @@ def test_extract_search_query_falls_back_to_instruction_without_ocr_text():
     assert extract_search_query(request) == "find the official docs for this product"
 
 
+def test_build_prompt_extract_action_includes_only_the_requested_schema_shape():
+    # Pure-function unit test — build_prompt is internal prompt-construction logic, not an
+    # endpoint, so this imports directly rather than going through HTTP (matches the
+    # extract_search_query tests above).
+    from server import build_prompt, AnalyzeRequest
+
+    request = AnalyzeRequest(
+        image_data=SAMPLE_IMAGE_DATA_URL,
+        mime_type="image/png",
+        instruction="pull out the contacts",
+        action="extract",
+        extract_schema="contact_list",
+        model="gpt-5.5",
+    )
+    prompt = build_prompt(request)
+    assert '"schema": "contact_list"' in prompt
+    assert "no prose" in prompt
+    assert '"schema": "table"' not in prompt
+
+
+def test_build_prompt_extract_action_auto_schema_offers_every_shape():
+    from server import build_prompt, AnalyzeRequest
+
+    request = AnalyzeRequest(
+        image_data=SAMPLE_IMAGE_DATA_URL,
+        mime_type="image/png",
+        instruction="pull out whatever structured data is visible",
+        action="extract",
+        model="gpt-5.5",
+    )
+    prompt = build_prompt(request)
+    for schema in ["table", "key_value", "contact_list", "task_list", "json_object"]:
+        assert f'"schema": "{schema}"' in prompt
+
+
+@pytest.mark.integration
+def test_extract_action_with_schema_streams_successfully():
+    marker = "TEST_STRUCTURED_EXTRACT_ACTION"
+    response = requests.post(
+        f"{API_BASE}/captures/analyze",
+        json={
+            "image_data": SAMPLE_IMAGE_DATA_URL,
+            "mime_type": "image/png",
+            "instruction": f"{marker}: extract the totals as a table",
+            "action": "extract",
+            "extract_schema": "table",
+            "model": "gemini-3.1-pro-preview",
+            "regions": [],
+            "annotations": [],
+            "source": {"application": "Web dashboard", "window_title": "TEST extract", "url": "https://example.test/extract"},
+            "private_mode": True,
+            "ocr_text": "Invoice 4821\nTotal 193.75",
+        },
+        timeout=180,
+        stream=True,
+    )
+    assert response.status_code == 200
+    events = _stream_events(response)
+    _skip_if_provider_unavailable(events)
+    done = next((event for event in events if event.get("type") == "done"), None)
+    assert done is not None
+
+
 def _searxng_reachable() -> bool:
     searxng_url = os.environ.get("SEARXNG_URL", "http://localhost:8888")
     try:

@@ -126,6 +126,7 @@ class AnalyzeRequest(BaseModel):
     mime_type: str
     instruction: str = Field(min_length=1, max_length=4000)
     action: Literal["ask", "copy", "explain", "search", "translate", "summarize", "extract", "compare"] = "ask"
+    extract_schema: Literal["auto", "table", "key_value", "contact_list", "task_list", "json_object"] = "auto"
     model: str = "gpt-5.5"
     regions: List[Region] = Field(default_factory=list, max_length=12)
     annotations: List[Annotation] = Field(default_factory=list, max_length=30)
@@ -192,6 +193,34 @@ def canonical_image_base64(raw: bytes) -> str:
         raise HTTPException(status_code=400, detail="Image bytes could not be decoded") from exc
 
 
+# Each shape is deliberately wrapped as {"schema": ..., "data": ...} (rather than a bare
+# per-schema object) so the frontend has exactly one wire format to parse regardless of which
+# schema was requested or which one "auto" picked.
+EXTRACT_SCHEMA_SHAPES = {
+    "table": '{"schema": "table", "data": {"columns": ["<column name>", ...], "rows": [["<cell>", ...], ...]}}',
+    "key_value": '{"schema": "key_value", "data": {"pairs": [{"key": "<label>", "value": "<value>"}, ...]}}',
+    "contact_list": '{"schema": "contact_list", "data": {"contacts": [{"name": "<name>", "email": "<email or null>", '
+                     '"phone": "<phone or null>", "role": "<role/title or null>"}, ...]}}',
+    "task_list": '{"schema": "task_list", "data": {"tasks": [{"title": "<task text>", "done": <true|false>, '
+                  '"assignee": "<name or null>", "due": "<date/deadline text or null>"}, ...]}}',
+    "json_object": '{"schema": "json_object", "data": <any JSON value that best represents the requested information>}',
+}
+
+
+def _extract_action_guide(schema: str) -> str:
+    if schema == "auto":
+        options = "\n".join(f"- {shape}" for shape in EXTRACT_SCHEMA_SHAPES.values())
+        return (
+            "Extract the requested information as JSON. Pick whichever of the following shapes best fits what was "
+            f"selected, and respond with ONLY that JSON object — no prose, no Markdown code fences:\n{options}"
+        )
+    return (
+        f"Extract the requested information as JSON matching exactly this shape: {EXTRACT_SCHEMA_SHAPES[schema]}. "
+        "Respond with ONLY that JSON object — no prose, no Markdown code fences. If a field isn't visible, use null "
+        "rather than guessing."
+    )
+
+
 def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] = None) -> str:
     action_guides = {
         "copy": "Recover the requested text precisely, preserving layout. Return only copy-ready content.",
@@ -201,7 +230,7 @@ def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] =
                    "official sources, and say plainly if the results don't answer the question rather than guessing.",
         "translate": "Translate the selected content while preserving headings, lists, tables, and tone.",
         "summarize": "Summarize the selected content with key facts, decisions, and open questions.",
-        "extract": "Extract the requested information into valid, concise JSON or a Markdown table when more appropriate.",
+        "extract": _extract_action_guide(request.extract_schema),
         "compare": "Compare the numbered selected regions explicitly, listing similarities, differences, and a conclusion.",
         "ask": "Answer the instruction using only the supplied visual and source context. State uncertainty when needed.",
     }
