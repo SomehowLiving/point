@@ -101,9 +101,47 @@ for (const [name, url] of sites) {
   }
 }
 
-fs.writeFileSync(outputPath, JSON.stringify({ created_at: new Date().toISOString(), browser: "Google Chrome", sites: results }, null, 2));
+// Full-page (scroll + stitch) capture is a distinct code path (captureFullPage, OffscreenCanvas
+// stitching) from the default single-viewport capture exercised above — verify it separately
+// against a page long enough to actually require scrolling.
+let fullPageTest = { ok: false };
+{
+  const url = "https://en.wikipedia.org/wiki/Optical_character_recognition";
+  const page = await context.newPage();
+  const started = Date.now();
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+    await page.waitForTimeout(1800);
+    const result = await worker.evaluate(async (targetUrl) => {
+      const tabs = await chrome.tabs.query({});
+      const tab = tabs.find((item) => item.url?.startsWith(targetUrl.split("/").slice(0, 3).join("/")) && !item.url.includes("localhost:3000"));
+      if (!tab) throw new Error(`No source tab found for ${targetUrl}`);
+      await chrome.tabs.update(tab.id, { active: true });
+      await openCaptureFlow(tab, { fullPage: true });
+      return chrome.storage.local.get(["lastCaptureStatus", "pendingCapture"]);
+    }, url);
+    const status = result.lastCaptureStatus || {};
+    const pending = result.pendingCapture || {};
+    const fullPageMeta = pending.source?.page_context?.full_page || null;
+    fullPageTest = {
+      ok: status.ok === true && status.fullPage === true && Boolean(fullPageMeta) && fullPageMeta.sections > 1,
+      screenshot_bytes: status.bytes || 0,
+      full_page_meta: fullPageMeta,
+      dom_elements_count: (pending.source?.page_context?.dom_elements || []).length,
+      duration_ms: Date.now() - started,
+      error: status.error || "",
+    };
+  } catch (error) {
+    fullPageTest = { ok: false, duration_ms: Date.now() - started, error: error.message };
+  } finally {
+    await page.close().catch(() => {});
+    for (const openPage of context.pages()) if (openPage.url().includes("localhost:3000/capture")) await openPage.close().catch(() => {});
+  }
+}
+
+fs.writeFileSync(outputPath, JSON.stringify({ created_at: new Date().toISOString(), browser: "Google Chrome", sites: results, full_page_test: fullPageTest }, null, 2));
 await context.close();
 chrome.kill("SIGTERM");
 const failures = results.filter((result) => !result.ok);
-console.log(JSON.stringify(results, null, 2));
-if (failures.length) process.exitCode = 1;
+console.log(JSON.stringify({ sites: results, full_page_test: fullPageTest }, null, 2));
+if (failures.length || !fullPageTest.ok) process.exitCode = 1;

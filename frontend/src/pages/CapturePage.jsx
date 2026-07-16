@@ -148,8 +148,10 @@ export default function CapturePage() {
       if (event.origin !== window.location.origin || event.data?.type !== "SPATIAL_AI_EXTENSION_CAPTURE") return;
       const payload = event.data.payload;
       if (!payload?.screenshot) return;
-      setImage(payload.screenshot); setMimeType("image/png"); setSource(payload.source || source);
-      resetRegionState(); setViewport(DEFAULT_VIEWPORT); setResult(""); setSearchResults([]); toast.success("Browser tab captured with page context");
+      setImage(payload.screenshot); setMimeType(payload.mimeType || "image/png"); setSource(payload.source || source);
+      resetRegionState(); setViewport(DEFAULT_VIEWPORT); setResult(""); setSearchResults([]);
+      const sections = payload.source?.page_context?.full_page?.sections;
+      toast.success(sections ? `Full page captured · ${sections} section${sections === 1 ? "" : "s"} stitched` : "Browser tab captured with page context");
     };
     window.addEventListener("message", receiveExtensionCapture);
     return () => window.removeEventListener("message", receiveExtensionCapture);
