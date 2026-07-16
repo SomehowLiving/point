@@ -339,7 +339,7 @@ def test_ocr_explicit_paddle_request_isolated_fallback_does_not_crash_backend():
     assert health.status_code == 200
 
 
-@pytest.mark.parametrize("export_format,expected_extension", [("text", ".txt"), ("markdown", ".md"), ("json", ".json"), ("csv", ".csv")])
+@pytest.mark.parametrize("export_format,expected_extension", [("text", ".txt"), ("markdown", ".md"), ("json", ".json"), ("csv", ".csv"), ("html", ".html")])
 def test_structured_exports(export_format: str, expected_extension: str):
     response = requests.post(
         f"{API_BASE}/exports/render",
@@ -364,6 +364,7 @@ def test_structured_exports(export_format: str, expected_extension: str):
         ("markdown", ".md", "text/markdown;charset=utf-8"),
         ("json", ".json", "application/json"),
         ("csv", ".csv", "text/csv;charset=utf-8"),
+        ("html", ".html", "text/html;charset=utf-8"),
     ],
 )
 def test_export_mime_filename_and_non_empty_content(
@@ -396,6 +397,66 @@ def test_export_mime_filename_and_non_empty_content(
     assert payload["filename"].endswith(expected_extension)
     assert payload["mime_type"] == expected_mime
     assert isinstance(payload["content"], str) and len(payload["content"].strip()) > 0
+
+
+def test_smart_copy_preserves_heading_and_paragraph_structure_in_markdown_and_html():
+    words = [
+        {"region": 0, "text": "Summary", "confidence": 0.98, "box": {"x": 0, "y": 0, "width": 140, "height": 30}, "line_key": "0:0:0:0"},
+        {"region": 0, "text": "This", "confidence": 0.98, "box": {"x": 0, "y": 50, "width": 30, "height": 14}, "line_key": "0:1:0:0"},
+        {"region": 0, "text": "is", "confidence": 0.98, "box": {"x": 34, "y": 50, "width": 16, "height": 14}, "line_key": "0:1:0:0"},
+        {"region": 0, "text": "body", "confidence": 0.98, "box": {"x": 54, "y": 50, "width": 40, "height": 14}, "line_key": "0:1:0:0"},
+        {"region": 0, "text": "text.", "confidence": 0.98, "box": {"x": 98, "y": 50, "width": 40, "height": 14}, "line_key": "0:1:0:0"},
+    ]
+    response = requests.post(
+        f"{API_BASE}/exports/render",
+        json={"format": "markdown", "title": "Report", "source": {"url": "https://example.test/report"}, "payload": {"text": "", "words": words}},
+        timeout=30,
+    )
+    assert response.status_code == 200
+    markdown = response.json()["content"]
+    assert "# Summary" in markdown
+    assert "This is body text." in markdown
+    assert "Source: https://example.test/report" in markdown
+
+    html_response = requests.post(
+        f"{API_BASE}/exports/render",
+        json={"format": "html", "title": "Report", "source": {"url": "https://example.test/report"}, "payload": {"text": "", "words": words}},
+        timeout=30,
+    )
+    assert html_response.status_code == 200
+    html = html_response.json()["content"]
+    assert "<h1>Summary</h1>" in html
+    assert "<p>This is body text.</p>" in html
+
+
+def test_smart_copy_reconstructs_table_in_csv_and_json_structure():
+    words = [
+        {"region": 0, "text": "Name", "confidence": 0.98, "box": {"x": 0, "y": 0, "width": 40, "height": 14}, "line_key": "0:0:0:0"},
+        {"region": 0, "text": "Score", "confidence": 0.98, "box": {"x": 200, "y": 0, "width": 40, "height": 14}, "line_key": "0:0:0:0"},
+        {"region": 0, "text": "Ana", "confidence": 0.98, "box": {"x": 3, "y": 30, "width": 30, "height": 14}, "line_key": "0:0:1:0"},
+        {"region": 0, "text": "92", "confidence": 0.98, "box": {"x": 202, "y": 30, "width": 20, "height": 14}, "line_key": "0:0:1:0"},
+        {"region": 0, "text": "Bo", "confidence": 0.98, "box": {"x": 5, "y": 60, "width": 24, "height": 14}, "line_key": "0:0:2:0"},
+        {"region": 0, "text": "81", "confidence": 0.98, "box": {"x": 198, "y": 60, "width": 20, "height": 14}, "line_key": "0:0:2:0"},
+    ]
+    csv_response = requests.post(
+        f"{API_BASE}/exports/render",
+        json={"format": "csv", "title": "Scores", "source": {}, "payload": {"text": "", "words": words}},
+        timeout=30,
+    )
+    assert csv_response.status_code == 200
+    csv_content = csv_response.json()["content"]
+    assert "Name,Score" in csv_content.replace("\r\n", "\n")
+    assert "Ana,92" in csv_content.replace("\r\n", "\n")
+
+    json_response = requests.post(
+        f"{API_BASE}/exports/render",
+        json={"format": "json", "title": "Scores", "source": {}, "payload": {"text": "", "words": words}},
+        timeout=30,
+    )
+    assert json_response.status_code == 200
+    structure = json_response.json()["content"]
+    parsed = json.loads(structure)
+    assert any(block["type"] == "table" and block["rows"][0] == ["Name", "Score"] for block in parsed["structure"])
 
 
 @pytest.mark.integration

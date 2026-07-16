@@ -115,7 +115,7 @@ class OCRRequest(BaseModel):
 
 
 class ExportRequest(BaseModel):
-    format: Literal["text", "markdown", "json", "csv"]
+    format: Literal["text", "markdown", "json", "csv", "html"]
     title: str = Field(default="Spatial AI extraction", max_length=200)
     source: SourceContext = Field(default_factory=SourceContext)
     payload: dict

@@ -33,3 +33,26 @@ export async function writeClipboard(text) {
     if (!copied) throw new Error("Clipboard permission was denied. Use the download button instead.");
   }
 }
+
+// Writes real text/html clipboard content so pasting into rich targets
+// (Docs, Notion, email) preserves headings/lists/tables instead of raw markup.
+// Tauri's clipboard plugin has no HTML write API, so the native shell falls
+// back to plain text there.
+export async function writeRichClipboard(html, plainText) {
+  if (isNativeShell()) {
+    const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+    return writeText(plainText);
+  }
+  try {
+    if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+      throw new Error("Rich clipboard API unavailable");
+    }
+    const item = new ClipboardItem({
+      "text/html": new Blob([html], { type: "text/html" }),
+      "text/plain": new Blob([plainText], { type: "text/plain" }),
+    });
+    return await navigator.clipboard.write([item]);
+  } catch (error) {
+    return writeClipboard(plainText);
+  }
+}
