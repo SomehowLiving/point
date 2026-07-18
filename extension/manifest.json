@@ -11,6 +11,11 @@
       "matches": ["http://localhost:3000/*"],
       "js": ["bridge.js"],
       "run_at": "document_start"
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["lens.js"],
+      "run_at": "document_idle"
     }
   ],
   "action": {"default_title": "Capture with Spatial AI"},
@@ -22,6 +27,10 @@
     "capture-full-page": {
       "suggested_key": {"default": "Alt+Shift+F", "windows": "Alt+Shift+F"},
       "description": "Capture full scrolling page"
+    },
+    "toggle-lens": {
+      "suggested_key": {"default": "Alt+Shift+L", "windows": "Alt+Shift+L"},
+      "description": "Toggle Real-Time Lens"
     }
   }
 }

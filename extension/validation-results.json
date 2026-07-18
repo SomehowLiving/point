@@ -1,5 +1,5 @@
 {
-  "created_at": "2026-07-16T12:29:38.174Z",
+  "created_at": "2026-07-16T12:59:27.878Z",
   "browser": "Google Chrome",
   "sites": [
     {
@@ -7,10 +7,10 @@
       "url": "https://github.com/tauri-apps/tauri",
       "title": "GitHub - tauri-apps/tauri: Build smaller, faster, and more secure desktop and mobile applications with a web frontend. · GitHub",
       "ok": true,
-      "screenshot_bytes": 173062,
+      "screenshot_bytes": 171242,
       "enriched": true,
-      "page_context_bytes": 47671,
-      "dom_elements_count": 221,
+      "page_context_bytes": 47506,
+      "dom_elements_count": 220,
       "dom_elements_sample": [
         {
           "tag": "a",
@@ -25,7 +25,7 @@
           "text": "Navigation Menu"
         }
       ],
-      "duration_ms": 4819,
+      "duration_ms": 4901,
       "error": ""
     },
     {
@@ -51,7 +51,7 @@
           "text": ""
         }
       ],
-      "duration_ms": 2635,
+      "duration_ms": 2741,
       "error": ""
     },
     {
@@ -59,9 +59,9 @@
       "url": "https://www.amazon.com/",
       "title": "Amazon.com. Spend less. Smile more.",
       "ok": true,
-      "screenshot_bytes": 892710,
+      "screenshot_bytes": 836986,
       "enriched": true,
-      "page_context_bytes": 36871,
+      "page_context_bytes": 36591,
       "dom_elements_count": 56,
       "dom_elements_sample": [
         {
@@ -77,7 +77,7 @@
           "text": "Deliver to\nIndia"
         }
       ],
-      "duration_ms": 2688,
+      "duration_ms": 2653,
       "error": ""
     },
     {
@@ -85,9 +85,9 @@
       "url": "https://stackoverflow.com/questions/tagged/python",
       "title": "Newest 'python' Questions - Stack Overflow",
       "ok": true,
-      "screenshot_bytes": 210658,
+      "screenshot_bytes": 215102,
       "enriched": true,
-      "page_context_bytes": 47151,
+      "page_context_bytes": 47415,
       "dom_elements_count": 155,
       "dom_elements_sample": [
         {
@@ -103,7 +103,7 @@
           "text": ""
         }
       ],
-      "duration_ms": 3262,
+      "duration_ms": 3106,
       "error": ""
     },
     {
@@ -113,8 +113,8 @@
       "ok": true,
       "screenshot_bytes": 87226,
       "enriched": true,
-      "page_context_bytes": 13430,
-      "dom_elements_count": 77,
+      "page_context_bytes": 13555,
+      "dom_elements_count": 78,
       "dom_elements_sample": [
         {
           "tag": "a",
@@ -129,33 +129,20 @@
           "text": "Products\nResources\nEnterprise\nPricing"
         }
       ],
-      "duration_ms": 2616,
+      "duration_ms": 2497,
       "error": ""
     },
     {
       "name": "grafana",
       "url": "https://play.grafana.org/",
-      "title": "Dashboards - Grafana",
+      "title": "Grafana",
       "ok": true,
-      "screenshot_bytes": 21938,
+      "screenshot_bytes": 8398,
       "enriched": true,
-      "page_context_bytes": 1861,
-      "dom_elements_count": 9,
-      "dom_elements_sample": [
-        {
-          "tag": "button",
-          "text": "Main menu"
-        },
-        {
-          "tag": "a",
-          "text": ""
-        },
-        {
-          "tag": "img",
-          "text": "Grafana"
-        }
-      ],
-      "duration_ms": 3238,
+      "page_context_bytes": 272,
+      "dom_elements_count": 0,
+      "dom_elements_sample": [],
+      "duration_ms": 4396,
       "error": ""
     },
     {
@@ -163,9 +150,9 @@
       "url": "https://threejs.org/examples/",
       "title": "three.js examples",
       "ok": true,
-      "screenshot_bytes": 163762,
+      "screenshot_bytes": 163838,
       "enriched": true,
-      "page_context_bytes": 22532,
+      "page_context_bytes": 22523,
       "dom_elements_count": 7,
       "dom_elements_sample": [
         {
@@ -181,19 +168,26 @@
           "text": ""
         }
       ],
-      "duration_ms": 2262,
+      "duration_ms": 3377,
       "error": ""
     }
   ],
   "full_page_test": {
     "ok": true,
-    "screenshot_bytes": 2156927,
+    "screenshot_bytes": 6230310,
     "full_page_meta": {
       "sections": 15,
       "truncated": false
     },
     "dom_elements_count": 300,
-    "duration_ms": 14304,
+    "duration_ms": 15457,
     "error": ""
+  },
+  "lens_test": {
+    "ok": true,
+    "badge_visible": true,
+    "quota_limited": true,
+    "result_text": "Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/doc",
+    "duration_ms": 7694
   }
 }

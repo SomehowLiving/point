@@ -203,8 +203,100 @@ async function openCaptureFlow(tab, { fullPage = false } = {}) {
   }
 }
 
+const DEFAULT_BACKEND_URL = "http://localhost:8001";
+
+// Real-Time Lens: the content script (lens.js) can't call captureVisibleTab or reach the backend
+// itself (a page-origin fetch to localhost:8001 would be blocked by CORS, and captureVisibleTab
+// requires the background/service-worker context) — it asks the background script to do both and
+// relay back the final answer, reusing the exact same screenshot + page-context + analyze pipeline
+// the regular capture flow already uses.
+async function fetchLensAnalysis({ imageData, mimeType, instruction, point, source }) {
+  const { backendUrl } = await chrome.storage.local.get("backendUrl");
+  const base = (backendUrl || DEFAULT_BACKEND_URL).replace(/\/$/, "");
+  const response = await fetch(`${base}/api/captures/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      image_data: imageData,
+      mime_type: mimeType,
+      instruction,
+      action: "explain",
+      regions: [],
+      annotations: [],
+      points: [{ id: crypto.randomUUID(), x: point.x, y: point.y, label: null }],
+      source,
+      private_mode: true,
+      ocr_text: "",
+    }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail || `Analysis failed (${response.status})`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let text = "";
+  const consume = (raw) => {
+    const line = raw.split("\n").find((item) => item.startsWith("data: "));
+    if (!line) return;
+    const event = JSON.parse(line.slice(6));
+    if (event.type === "delta") text += event.content;
+    if (event.type === "error") throw new Error(event.message);
+  };
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split("\n\n");
+    buffer = events.pop() || "";
+    for (const raw of events) consume(raw);
+  }
+  if (buffer.trim()) consume(buffer);
+  return text || "(no response)";
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type !== "LENS_ANALYZE" || !sender.tab) return false;
+  (async () => {
+    try {
+      const [imageData, pageContext] = await Promise.all([
+        captureVisibleTabWithRetry(sender.tab.windowId),
+        collectPageContext(sender.tab, { fullDocument: false }),
+      ]);
+      const text = await fetchLensAnalysis({
+        imageData,
+        mimeType: "image/png",
+        instruction: message.instruction || "Explain what's at this point.",
+        point: message.point,
+        source: { application: "Google Chrome", window_title: sender.tab.title || "", url: sender.tab.url || "", page_context: pageContext },
+      });
+      sendResponse({ ok: true, text });
+    } catch (error) {
+      sendResponse({ ok: false, error: error.message });
+    }
+  })();
+  return true; // keep the message channel open for the async sendResponse above
+});
+
 chrome.action.onClicked.addListener((tab) => openCaptureFlow(tab));
 chrome.commands.onCommand.addListener(async (command) => {
+  if (command === "toggle-lens") {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) return;
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: "TOGGLE_LENS" });
+    } catch {
+      // Content script may not be injected yet (page open since before install/update) — inject once, then retry.
+      try {
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["lens.js"] });
+        await chrome.tabs.sendMessage(tab.id, { type: "TOGGLE_LENS" });
+      } catch {
+        /* restricted page (chrome://, Web Store, etc.) — nothing we can do */
+      }
+    }
+    return;
+  }
   if (command !== "capture-context" && command !== "capture-full-page") return;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   await openCaptureFlow(tab, { fullPage: command === "capture-full-page" });

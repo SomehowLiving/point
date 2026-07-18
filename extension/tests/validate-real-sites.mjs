@@ -139,9 +139,65 @@ let fullPageTest = { ok: false };
   }
 }
 
-fs.writeFileSync(outputPath, JSON.stringify({ created_at: new Date().toISOString(), browser: "Google Chrome", sites: results, full_page_test: fullPageTest }, null, 2));
+// Real-Time Lens is a distinct code path (lens.js content-script overlay + LENS_ANALYZE message
+// round-trip through background.js) from the tab-based capture flow exercised above — verify it
+// with a REAL click (page.mouse.click, a genuine OS-level input event, not a synthetic dispatch)
+// so the content script's capture-phase click listener actually has to intercept it for real.
+// A provider quota/rate-limit error still proves the click -> screenshot -> backend -> panel
+// pipeline works end to end; only the demo API key ran out, so it's labeled, not a hard failure —
+// matching QUOTA_ERROR_HINTS in backend/tests/test_api.py.
+const QUOTA_ERROR_PATTERN = /insufficient_quota|resource_exhausted|rate limit|quota|\b429\b/i;
+let lensTest = { ok: false };
+{
+  const url = "https://en.wikipedia.org/wiki/Optical_character_recognition";
+  const page = await context.newPage();
+  const started = Date.now();
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+    await page.waitForTimeout(1800);
+    await worker.evaluate(async (targetUrl) => {
+      const tabs = await chrome.tabs.query({});
+      const tab = tabs.find((item) => item.url?.startsWith(targetUrl.split("/").slice(0, 3).join("/")) && !item.url.includes("localhost:3000"));
+      if (!tab) throw new Error(`No source tab found for ${targetUrl}`);
+      await chrome.tabs.update(tab.id, { active: true });
+      await chrome.tabs.sendMessage(tab.id, { type: "TOGGLE_LENS" });
+    }, url);
+    await page.waitForTimeout(500); // let the content script build the shadow-DOM overlay
+    const badgeVisible = await page.evaluate(() => Boolean(document.getElementById("spatial-ai-lens-host")?.shadowRoot?.querySelector(".badge")));
+    const viewport = page.viewportSize() || { width: 1280, height: 720 };
+    await page.mouse.click(Math.floor(viewport.width / 2), Math.floor(viewport.height / 2));
+
+    let resultText = null;
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
+      resultText = await page.evaluate(() => document.getElementById("spatial-ai-lens-host")?.shadowRoot?.querySelector(".body")?.textContent || null);
+      if (resultText && resultText !== "Thinking…") break;
+      await page.waitForTimeout(500);
+    }
+    const quotaLimited = QUOTA_ERROR_PATTERN.test(resultText || "");
+    lensTest = {
+      ok: badgeVisible && Boolean(resultText) && resultText !== "Thinking…" && (quotaLimited || !/analysis failed|extension was reloaded/i.test(resultText || "")),
+      badge_visible: badgeVisible,
+      quota_limited: quotaLimited,
+      result_text: (resultText || "").slice(0, 200),
+      duration_ms: Date.now() - started,
+    };
+    await worker.evaluate(async (targetUrl) => {
+      const tabs = await chrome.tabs.query({});
+      const tab = tabs.find((item) => item.url?.startsWith(targetUrl.split("/").slice(0, 3).join("/")) && !item.url.includes("localhost:3000"));
+      if (tab) await chrome.tabs.sendMessage(tab.id, { type: "TOGGLE_LENS" });
+    }, url);
+  } catch (error) {
+    lensTest = { ok: false, duration_ms: Date.now() - started, error: error.message };
+  } finally {
+    await page.close().catch(() => {});
+    for (const openPage of context.pages()) if (openPage.url().includes("localhost:3000/capture")) await openPage.close().catch(() => {});
+  }
+}
+
+fs.writeFileSync(outputPath, JSON.stringify({ created_at: new Date().toISOString(), browser: "Google Chrome", sites: results, full_page_test: fullPageTest, lens_test: lensTest }, null, 2));
 await context.close();
 chrome.kill("SIGTERM");
 const failures = results.filter((result) => !result.ok);
-console.log(JSON.stringify({ sites: results, full_page_test: fullPageTest }, null, 2));
-if (failures.length || !fullPageTest.ok) process.exitCode = 1;
+console.log(JSON.stringify({ sites: results, full_page_test: fullPageTest, lens_test: lensTest }, null, 2));
+if (failures.length || !fullPageTest.ok || !lensTest.ok) process.exitCode = 1;
