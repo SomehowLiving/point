@@ -211,23 +211,25 @@ const DEFAULT_BACKEND_URL = "http://localhost:8001";
 // relay back the final answer, reusing the exact same screenshot + page-context + analyze pipeline
 // the regular capture flow already uses.
 async function fetchLensAnalysis({ imageData, mimeType, instruction, point, source }) {
-  const { backendUrl } = await chrome.storage.local.get("backendUrl");
+  const { backendUrl, lensModel } = await chrome.storage.local.get(["backendUrl", "lensModel"]);
   const base = (backendUrl || DEFAULT_BACKEND_URL).replace(/\/$/, "");
+  const body = {
+    image_data: imageData,
+    mime_type: mimeType,
+    instruction,
+    action: "explain",
+    regions: [],
+    annotations: [],
+    points: [{ id: crypto.randomUUID(), x: point.x, y: point.y, label: null }],
+    source,
+    private_mode: true,
+    ocr_text: "",
+  };
+  if (lensModel) body.model = lensModel; // else the backend applies its own default
   const response = await fetch(`${base}/api/captures/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      image_data: imageData,
-      mime_type: mimeType,
-      instruction,
-      action: "explain",
-      regions: [],
-      annotations: [],
-      points: [{ id: crypto.randomUUID(), x: point.x, y: point.y, label: null }],
-      source,
-      private_mode: true,
-      ocr_text: "",
-    }),
+    body: JSON.stringify(body),
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));

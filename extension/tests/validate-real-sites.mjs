@@ -155,6 +155,11 @@ let lensTest = { ok: false };
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForTimeout(1800);
+    // Pin Lens to a provider known to have working quota in this environment (verified repeatedly
+    // elsewhere in this session) so this test demonstrates a genuine successful AI response, not
+    // just the error-relay path — the default-model behavior is covered by not setting this at all
+    // in normal use.
+    await worker.evaluate(() => chrome.storage.local.set({ lensModel: "openrouter" }));
     await worker.evaluate(async (targetUrl) => {
       const tabs = await chrome.tabs.query({});
       const tab = tabs.find((item) => item.url?.startsWith(targetUrl.split("/").slice(0, 3).join("/")) && !item.url.includes("localhost:3000"));
@@ -175,13 +180,16 @@ let lensTest = { ok: false };
       await page.waitForTimeout(500);
     }
     const quotaLimited = QUOTA_ERROR_PATTERN.test(resultText || "");
+    const followUpInputVisible = await page.evaluate(() => Boolean(document.getElementById("spatial-ai-lens-host")?.shadowRoot?.querySelector(".panel input")));
     lensTest = {
       ok: badgeVisible && Boolean(resultText) && resultText !== "Thinking…" && (quotaLimited || !/analysis failed|extension was reloaded/i.test(resultText || "")),
       badge_visible: badgeVisible,
       quota_limited: quotaLimited,
+      follow_up_input_visible: followUpInputVisible,
       result_text: (resultText || "").slice(0, 200),
       duration_ms: Date.now() - started,
     };
+    await worker.evaluate(() => chrome.storage.local.remove("lensModel"));
     await worker.evaluate(async (targetUrl) => {
       const tabs = await chrome.tabs.query({});
       const tab = tabs.find((item) => item.url?.startsWith(targetUrl.split("/").slice(0, 3).join("/")) && !item.url.includes("localhost:3000"));

@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Point — Settings</title>
+  <style>
+    body { font: 14px/1.5 system-ui, sans-serif; background: #0d0d11; color: #e4e4e7; margin: 0; padding: 28px; min-width: 360px; }
+    h1 { font-size: 16px; margin: 0 0 4px; }
+    p.hint { color: #8b8b95; font-size: 12px; margin: 0 0 20px; }
+    label { display: block; font-size: 12px; color: #8b8b95; margin: 16px 0 6px; }
+    input, select { width: 100%; box-sizing: border-box; background: #16161c; border: 1px solid #2a2a33; color: #e4e4e7; border-radius: 6px; padding: 8px 10px; font: inherit; }
+    input:focus, select:focus { outline: 1px solid #34d399; }
+    button { margin-top: 20px; background: #34d399; color: #0d0d11; border: 0; border-radius: 6px; padding: 9px 16px; font: 600 13px/1 inherit; cursor: pointer; }
+    button:hover { background: #2bbd88; }
+    #status { margin-left: 10px; font-size: 12px; color: #8b8b95; }
+  </style>
+</head>
+<body>
+  <h1>Point extension settings</h1>
+  <p class="hint">These only need to be set once. Real-Time Lens and full-page capture use the backend URL directly.</p>
+
+  <label for="dashboardUrl">Dashboard URL</label>
+  <input id="dashboardUrl" placeholder="http://localhost:3000/capture" />
+
+  <label for="backendUrl">Backend URL</label>
+  <input id="backendUrl" placeholder="http://localhost:8001" />
+
+  <label for="lensModel">Real-Time Lens model</label>
+  <select id="lensModel">
+    <option value="">Use app default (gpt-5.5)</option>
+    <option value="gpt-5.5">GPT-5.5</option>
+    <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro</option>
+    <option value="openrouter">OpenRouter</option>
+    <option value="groq">Groq</option>
+  </select>
+
+  <div>
+    <button id="save">Save</button>
+    <span id="status"></span>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

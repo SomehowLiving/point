@@ -6,6 +6,7 @@
   "permissions": ["activeTab", "tabs", "storage", "scripting", "unlimitedStorage"],
   "host_permissions": ["<all_urls>"],
   "background": {"service_worker": "background.js"},
+  "options_page": "options.html",
   "content_scripts": [
     {
       "matches": ["http://localhost:3000/*"],
