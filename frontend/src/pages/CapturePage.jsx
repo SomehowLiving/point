@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowClockwise, ArrowCounterClockwise, ArrowsOutSimple, CheckCircle, Clipboard, Cursor, Desktop, EyeSlash, Hand, Lasso, MagnifyingGlassMinus, MagnifyingGlassPlus, MapPin, Monitor, PencilSimple, Scan, ShieldCheck, Trash, UploadSimple } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowCounterClockwise, ArrowsOutSimple, CheckCircle, Clipboard, Cursor, Desktop, EyeSlash, Hand, Lasso, MagnifyingGlassMinus, MagnifyingGlassPlus, MapPin, Monitor, PaperPlaneTilt, PencilSimple, Scan, ShieldCheck, Trash, UploadSimple } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import { CaptureCanvas } from "@/components/CaptureCanvas";
 import { CommandBar } from "@/components/CommandBar";
-import { analyzeCapture, extractOcr } from "@/lib/api";
+import { analyzeCapture, extractOcr, sendToNotion } from "@/lib/api";
 import { captureNative, isNativeShell, listenForNativeCapture, writeClipboard } from "@/lib/native";
 import { ExportBar } from "@/components/ExportBar";
 import { ExtractionResult } from "@/components/ExtractionResult";
@@ -131,6 +131,8 @@ export default function CapturePage() {
   const [searchResults, setSearchResults] = useState([]);
   const [source, setSource] = useState({ application:"Web dashboard", window_title:document.title, url:window.location.href });
   const [ocr, setOcr] = useState(null); const [ocrLoading, setOcrLoading] = useState(false); const nativeShell = isNativeShell();
+  const [notionPage, setNotionPage] = useState(() => localStorage.getItem("notionPage") || "");
+  const [sendingToNotion, setSendingToNotion] = useState(false);
   const fileRef = useRef(null);
   const loadFile = useCallback((file) => {
     if (!file || !accepted.includes(file.type)) return toast.error("Use a PNG, JPEG, or WEBP image");
@@ -177,6 +179,15 @@ export default function CapturePage() {
     } catch (error) { toast.error(error.message); } finally { setProcessing(false); }
   };
   const copyResult = async () => { await writeClipboard(result); toast.success("Result copied"); };
+  const rememberNotionPage = (value) => { setNotionPage(value); localStorage.setItem("notionPage", value); };
+  const sendNotion = async () => {
+    if (!notionPage.trim()) return toast.error("Paste a Notion page URL first (it's remembered after that)");
+    setSendingToNotion(true);
+    try {
+      const sent = await sendToNotion({ title: command.trim() || "Point capture", content: result, source_url: source?.url || "", parent_page: notionPage.trim() });
+      toast.success("Sent to Notion", sent.url ? { action: { label: "Open", onClick: () => window.open(sent.url, "_blank") } } : undefined);
+    } catch (error) { toast.error(error.message); } finally { setSendingToNotion(false); }
+  };
   const tools = [{ id:"region",label:"Select region",icon:Cursor },{ id:"point",label:"Point",icon:MapPin },{ id:"lasso",label:"Lasso",icon:Lasso },{ id:"freehand",label:"Draw",icon:PencilSimple },{ id:"redaction",label:"Redact",icon:EyeSlash },{ id:"pan",label:"Pan",icon:Hand }];
   const displayRegions = orderedRegions(regions, regionOrder);
   const extraction = result ? parseExtractionResult(result) : null;
@@ -193,7 +204,7 @@ export default function CapturePage() {
         <button onClick={() => canvasRef.current?.resetZoom()} disabled={!image} aria-label="Reset to 100%" title="Reset to 100%" data-testid="zoom-reset-button">100%</button>
       </div>
       <CommandBar {...{ action,setAction,command,setCommand,model,setModel,extractSchema,setExtractSchema,onSubmit:runAnalysis,disabled:processing || !image,processing }} /></div>
-      <aside className="result-panel" data-testid="analysis-result-panel"><div className="result-header"><div><span className="eyebrow">{ocr&&!result?"Deterministic OCR":"AI output"}</span><h2 data-testid="analysis-result-title">{ocr&&!result?"Structured extraction":"Grounded result"}</h2></div>{result && <button onClick={copyResult} data-testid="copy-result-button" aria-label="Copy result"><Clipboard /></button>}</div>{(processing||ocrLoading)&&!result&&!ocr&&<div className="result-loading" data-testid="analysis-loading-state"><i /><i /><i /><span>{ocrLoading?"Recovering text":"Reading selected context"}</span></div>}{result?<>{extraction?<ExtractionResult parsed={extraction} />:<div className="result-content" data-testid="analysis-result-content">{result}</div>}{searchResults.length>0&&<div className="search-sources" data-testid="search-sources"><span className="sources-label">Sources</span>{searchResults.map((item,index)=><a key={index} href={item.url} target="_blank" rel="noreferrer" className="source-item" data-testid={`source-item-${index}`}><span className="source-title">{item.title||item.url}</span><span className="source-url">{item.url}</span>{item.snippet&&<span className="source-snippet">{item.snippet}</span>}</a>)}</div>}</>:ocr?<div className="ocr-result" data-testid="ocr-result"><div className="ocr-stats"><span data-testid="ocr-engine">{ocr.engine}</span><span data-testid="ocr-confidence">{Math.round(ocr.average_confidence*100)}% confidence</span><span data-testid="ocr-word-count">{ocr.words.length} words</span></div><pre data-testid="ocr-text-content">{ocr.text||"No text detected"}</pre><ExportBar payload={ocr} source={source} /></div>:!processing&&!ocrLoading&&<div className="result-empty" data-testid="analysis-empty-state"><CheckCircle weight="thin" /><p>Your answer will stay anchored to the regions you point at.</p></div>}<div className="context-bundle" data-testid="context-bundle-summary"><span>CONTEXT BUNDLE</span><code>{`{ image, regions: ${regions.length}, points: ${points.length}, marks: ${annotations.length}, ocr: ${ocr?.words?.length||0}, private: ${privateMode} }`}</code></div></aside>
+      <aside className="result-panel" data-testid="analysis-result-panel"><div className="result-header"><div><span className="eyebrow">{ocr&&!result?"Deterministic OCR":"AI output"}</span><h2 data-testid="analysis-result-title">{ocr&&!result?"Structured extraction":"Grounded result"}</h2></div>{result && <button onClick={copyResult} data-testid="copy-result-button" aria-label="Copy result"><Clipboard /></button>}{result && <div className="notion-send" data-testid="notion-send-control"><input value={notionPage} onChange={(event) => rememberNotionPage(event.target.value)} placeholder="Notion page URL" data-testid="notion-page-input" /><button onClick={sendNotion} disabled={sendingToNotion} data-testid="send-notion-button" aria-label="Send to Notion" title="Send to Notion"><PaperPlaneTilt /></button></div>}</div>{(processing||ocrLoading)&&!result&&!ocr&&<div className="result-loading" data-testid="analysis-loading-state"><i /><i /><i /><span>{ocrLoading?"Recovering text":"Reading selected context"}</span></div>}{result?<>{extraction?<ExtractionResult parsed={extraction} />:<div className="result-content" data-testid="analysis-result-content">{result}</div>}{searchResults.length>0&&<div className="search-sources" data-testid="search-sources"><span className="sources-label">Sources</span>{searchResults.map((item,index)=><a key={index} href={item.url} target="_blank" rel="noreferrer" className="source-item" data-testid={`source-item-${index}`}><span className="source-title">{item.title||item.url}</span><span className="source-url">{item.url}</span>{item.snippet&&<span className="source-snippet">{item.snippet}</span>}</a>)}</div>}</>:ocr?<div className="ocr-result" data-testid="ocr-result"><div className="ocr-stats"><span data-testid="ocr-engine">{ocr.engine}</span><span data-testid="ocr-confidence">{Math.round(ocr.average_confidence*100)}% confidence</span><span data-testid="ocr-word-count">{ocr.words.length} words</span></div><pre data-testid="ocr-text-content">{ocr.text||"No text detected"}</pre><ExportBar payload={ocr} source={source} /></div>:!processing&&!ocrLoading&&<div className="result-empty" data-testid="analysis-empty-state"><CheckCircle weight="thin" /><p>Your answer will stay anchored to the regions you point at.</p></div>}<div className="context-bundle" data-testid="context-bundle-summary"><span>CONTEXT BUNDLE</span><code>{`{ image, regions: ${regions.length}, points: ${points.length}, marks: ${annotations.length}, ocr: ${ocr?.words?.length||0}, private: ${privateMode} }`}</code></div></aside>
     </div>
   </section>;
 }

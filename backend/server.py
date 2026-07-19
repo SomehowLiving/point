@@ -24,6 +24,7 @@ from PIL import Image
 import httpx
 from ocr_service import extract_ocr
 from export_service import render_export
+from notion_service import NOTION_API_VERSION, build_notion_page_payload, parse_notion_page_id
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -128,6 +129,13 @@ class ExportRequest(BaseModel):
     source: SourceContext = Field(default_factory=SourceContext)
     payload: dict
     clean: bool = False
+
+
+class NotionSendRequest(BaseModel):
+    title: str = Field(default="Point capture", max_length=200)
+    content: str = Field(min_length=1, max_length=100000)
+    source_url: str = Field(default="", max_length=2000)
+    parent_page: str = Field(min_length=1, max_length=2000)
 
 
 class AnalyzeRequest(BaseModel):
@@ -416,6 +424,39 @@ async def export_render(request: ExportRequest):
         return render_export(request.payload, request.format, request.title, request.source.model_dump(), request.clean)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@api_router.post("/integrations/notion/send")
+async def send_to_notion(request: NotionSendRequest):
+    parent_page_id = parse_notion_page_id(request.parent_page)
+    if not parent_page_id:
+        raise HTTPException(status_code=400, detail="Could not find a Notion page ID in that URL")
+    api_key = os.environ.get("NOTION_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Notion integration is not configured (missing NOTION_API_KEY)")
+    payload = build_notion_page_payload(parent_page_id, request.title, request.content, request.source_url)
+    try:
+        async with httpx.AsyncClient(timeout=15) as http_client:
+            response = await http_client.post(
+                "https://api.notion.com/v1/pages",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Notion-Version": NOTION_API_VERSION,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Notion: {exc}") from exc
+    if response.status_code >= 400:
+        try:
+            detail = response.json().get("message", response.text)
+        except ValueError:
+            detail = response.text
+        raise HTTPException(status_code=response.status_code, detail=f"Notion error: {detail}")
+    created = response.json()
+    return {"ok": True, "page_id": created.get("id"), "url": created.get("url")}
+
 
 SYSTEM_MESSAGE = "You are a precise multimodal assistant for visual screen context. Never reveal hidden or redacted content."
 

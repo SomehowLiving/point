@@ -3,6 +3,7 @@
 import json
 import os
 import struct
+import uuid
 import zlib
 import base64
 import io
@@ -397,6 +398,50 @@ def test_export_mime_filename_and_non_empty_content(
     assert payload["filename"].endswith(expected_extension)
     assert payload["mime_type"] == expected_mime
     assert isinstance(payload["content"], str) and len(payload["content"].strip()) > 0
+
+
+def test_send_to_notion_rejects_unparseable_page_url_regardless_of_configuration():
+    response = requests.post(
+        f"{API_BASE}/integrations/notion/send",
+        json={"title": "Test", "content": "Body", "source_url": "", "parent_page": "https://www.notion.so/not-a-real-id"},
+        timeout=15,
+    )
+    assert response.status_code == 400
+
+
+def test_send_to_notion_reports_missing_configuration():
+    # Whether NOTION_API_KEY is configured is a property of the SERVER process under test, not
+    # this pytest process (they don't share an environment) -- so this checks the server's actual
+    # response rather than a local os.environ read, matching how the quota-skip tests elsewhere in
+    # this file detect provider availability at runtime instead of via a static env-var guard.
+    response = requests.post(
+        f"{API_BASE}/integrations/notion/send",
+        json={"title": "Test", "content": "Body", "source_url": "", "parent_page": "1a2b3c4d5e6f708192a3b4c5d6e7f809"},
+        timeout=15,
+    )
+    if response.status_code != 503:
+        pytest.skip("Notion is configured on the server under test; this scenario only applies when it isn't")
+    assert "NOTION_API_KEY" in response.json()["detail"]
+
+
+@pytest.mark.integration
+def test_send_to_notion_creates_a_real_page():
+    parent_page = os.environ.get("NOTION_TEST_PAGE")
+    if not os.environ.get("NOTION_API_KEY") or not parent_page:
+        pytest.skip("Requires NOTION_API_KEY and NOTION_TEST_PAGE (a page shared with the integration) to run live")
+    marker = f"TEST_NOTION_SEND_{uuid.uuid4().hex[:8]}"
+    response = requests.post(
+        f"{API_BASE}/integrations/notion/send",
+        json={"title": marker, "content": "Created by an automated test.", "source_url": "https://example.test", "parent_page": parent_page},
+        timeout=30,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["page_id"]
+    # Notion's API has returned page URLs under both www.notion.so and app.notion.com in
+    # practice -- assert it's a Notion URL, not a specific domain.
+    assert "notion" in payload["url"]
 
 
 def test_clean_copy_removes_boilerplate_and_reports_count():

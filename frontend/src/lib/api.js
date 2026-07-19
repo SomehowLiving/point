@@ -69,3 +69,9 @@ export async function renderExport(payload) {
   if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.detail || "Export failed"); }
   return response.json();
 }
+
+export async function sendToNotion(payload) {
+  const response = await fetch(`${API}/integrations/notion/send`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.detail || "Sending to Notion failed"); }
+  return response.json();
+}
