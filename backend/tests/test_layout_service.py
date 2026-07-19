@@ -14,6 +14,7 @@ from layout_service import (  # noqa: E402
     blocks_to_html,
     blocks_to_markdown,
     blocks_to_text,
+    clean_blocks,
     linkify_html,
     linkify_markdown,
 )
@@ -181,3 +182,63 @@ def test_render_text_and_html_do_not_throw_on_all_block_types():
     assert "<h1>Title</h1>" in html
     assert "<pre><code>a = 1</code></pre>" in html
     assert "<table>" in html
+
+
+def test_clean_blocks_removes_navigation_list():
+    blocks = [
+        {"type": "list", "ordered": False, "items": ["Home", "About", "Contact", "Blog"]},
+        {"type": "paragraph", "text": "The actual article content goes here."},
+    ]
+    kept, removed = clean_blocks(blocks)
+    assert kept == [{"type": "paragraph", "text": "The actual article content goes here."}]
+    assert len(removed) == 1 and removed[0]["removed_reason"] == "navigation list"
+
+
+def test_clean_blocks_removes_isolated_nav_label_paragraph():
+    blocks = [
+        {"type": "paragraph", "text": "Sign In"},
+        {"type": "paragraph", "text": "Welcome to our product page."},
+    ]
+    kept, removed = clean_blocks(blocks)
+    assert kept == [{"type": "paragraph", "text": "Welcome to our product page."}]
+    assert removed[0]["removed_reason"] == "navigation label"
+
+
+def test_clean_blocks_removes_footer_copyright_and_ad_text():
+    blocks = [
+        {"type": "paragraph", "text": "© 2026 Example Corp. All rights reserved."},
+        {"type": "paragraph", "text": "Sponsored content from our partners."},
+        {"type": "paragraph", "text": "Real content stays."},
+    ]
+    kept, removed = clean_blocks(blocks)
+    assert kept == [{"type": "paragraph", "text": "Real content stays."}]
+    reasons = {block["removed_reason"] for block in removed}
+    assert reasons == {"footer/copyright text", "advertisement label"}
+
+
+def test_clean_blocks_removes_exact_duplicate_paragraphs_and_headings():
+    blocks = [
+        {"type": "heading", "level": 1, "text": "Section Title"},
+        {"type": "paragraph", "text": "Some unique content."},
+        {"type": "heading", "level": 1, "text": "Section Title"},
+        {"type": "paragraph", "text": "Some unique content."},
+    ]
+    kept, removed = clean_blocks(blocks)
+    assert kept == [
+        {"type": "heading", "level": 1, "text": "Section Title"},
+        {"type": "paragraph", "text": "Some unique content."},
+    ]
+    assert len(removed) == 2
+    assert all(block["removed_reason"] == "duplicate content" for block in removed)
+
+
+def test_clean_blocks_leaves_normal_content_untouched():
+    blocks = [
+        {"type": "heading", "level": 1, "text": "Quarterly Report"},
+        {"type": "paragraph", "text": "Revenue grew by twelve percent this quarter."},
+        {"type": "list", "ordered": True, "items": ["Increase marketing spend", "Hire two engineers"]},
+        {"type": "table", "rows": [["Q1", "Q2"], ["100", "120"]]},
+    ]
+    kept, removed = clean_blocks(blocks)
+    assert kept == blocks
+    assert removed == []

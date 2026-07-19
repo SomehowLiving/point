@@ -29,6 +29,25 @@ TABLE_COLUMN_TOLERANCE_MULTIPLIER = 2.0
 TABLE_MIN_COLUMNS = 2
 TABLE_MAX_COLUMNS = 8
 
+# Clean copy: common nav/CTA labels short enough to plausibly BE a whole block by themselves
+# (an isolated "Login" button, a stacked sidebar menu where each item is its own line). A
+# concatenated single-line navbar ("Home About Contact Blog") can't be reliably split back into
+# items once OCR words are space-joined into one line -- that's a real, documented limitation,
+# not something this heuristic set claims to catch.
+NAV_VOCABULARY = {
+    "home", "about", "about us", "contact", "contact us", "login", "log in", "sign in", "sign up",
+    "register", "menu", "search", "cart", "checkout", "help", "support", "faq", "careers", "blog",
+    "news", "terms", "terms of service", "terms of use", "privacy", "privacy policy",
+    "cookie policy", "cookies", "subscribe", "newsletter", "follow us", "share", "skip to content",
+    "skip to main content", "back to top", "sitemap", "accessibility", "download", "learn more",
+    "read more", "close", "menu toggle", "toggle navigation",
+}
+FOOTER_PATTERN = re.compile(
+    r"©|copyright|all rights reserved|powered by|terms of (service|use)|privacy policy",
+    re.IGNORECASE,
+)
+AD_PATTERN = re.compile(r"\bsponsored\b|\badvertisement\b|\bad choices\b|\bpromoted\b", re.IGNORECASE)
+
 
 ROW_CENTER_TOLERANCE_MULTIPLIER = 0.6
 
@@ -277,6 +296,56 @@ def analyze_layout(words: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             index = cursor
 
     return blocks
+
+
+def _looks_like_nav_label(text: str) -> bool:
+    return text.strip().lower().rstrip(".!") in NAV_VOCABULARY
+
+
+def _boilerplate_reason(block: Dict[str, Any]) -> Optional[str]:
+    if block["type"] == "list":
+        items = block.get("items", [])
+        if items and all(_looks_like_nav_label(item) for item in items):
+            return "navigation list"
+        return None
+    if block["type"] == "paragraph":
+        text = block.get("text", "")
+        if _looks_like_nav_label(text):
+            return "navigation label"
+        if FOOTER_PATTERN.search(text):
+            return "footer/copyright text"
+        if AD_PATTERN.search(text):
+            return "advertisement label"
+        return None
+    return None
+
+
+def clean_blocks(blocks: List[Dict[str, Any]]) -> Any:
+    """Filters likely navigation/footer/ad boilerplate and exact-duplicate blocks out of an
+    analyze_layout() result. Returns (kept_blocks, removed_blocks) -- removed blocks are reported,
+    never silently dropped, so a caller can show what was taken out.
+
+    This is textual pattern-matching over a single capture, not the full "clean copy" spec: it
+    has no cross-capture history to spot "repeated headers" across pages, and no visual signal to
+    spot an actual watermark image -- both would need capabilities this OCR-based pipeline doesn't
+    have. It catches common nav/footer/ad text patterns and same-capture exact duplicates.
+    """
+    kept: List[Dict[str, Any]] = []
+    removed: List[Dict[str, Any]] = []
+    seen_text = set()
+    for block in blocks:
+        reason = _boilerplate_reason(block)
+        if reason:
+            removed.append({**block, "removed_reason": reason})
+            continue
+        signature = block.get("text") if block["type"] in {"paragraph", "heading"} else None
+        if signature is not None:
+            if signature in seen_text:
+                removed.append({**block, "removed_reason": "duplicate content"})
+                continue
+            seen_text.add(signature)
+        kept.append(block)
+    return kept, removed
 
 
 def linkify_markdown(text: str) -> str:

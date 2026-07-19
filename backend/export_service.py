@@ -3,7 +3,7 @@ import io
 import json
 from typing import Any, Dict
 
-from layout_service import analyze_layout, blocks_to_html, blocks_to_markdown, blocks_to_text
+from layout_service import analyze_layout, blocks_to_html, blocks_to_markdown, blocks_to_text, clean_blocks
 
 MIME_TYPES = {
     "text": "text/plain;charset=utf-8",
@@ -18,9 +18,12 @@ def _source_line(source: Dict[str, Any]) -> str:
     return source.get("url") or source.get("window_title") or source.get("application", "")
 
 
-def render_export(payload: Dict[str, Any], export_format: str, title: str, source: Dict[str, Any]) -> Dict[str, str]:
+def render_export(payload: Dict[str, Any], export_format: str, title: str, source: Dict[str, Any], clean: bool = False) -> Dict[str, Any]:
     safe_title = "".join(character if character.isalnum() or character in "-_" else "-" for character in title.lower()).strip("-") or "spatial-capture"
     blocks = analyze_layout(payload.get("words", []))
+    removed_blocks: list = []
+    if clean:
+        blocks, removed_blocks = clean_blocks(blocks)
     source_line = _source_line(source)
 
     if export_format == "text":
@@ -39,7 +42,11 @@ def render_export(payload: Dict[str, Any], export_format: str, title: str, sourc
         content = f"<article><h1>{html_module.escape(title)}</h1>\n{body}\n{footer}</article>"
         extension = "html"
     elif export_format == "json":
-        content = json.dumps({"title": title, "source": source, "ocr": payload, "structure": blocks}, ensure_ascii=False, indent=2)
+        content = json.dumps(
+            {"title": title, "source": source, "ocr": payload, "structure": blocks, "removed_boilerplate": removed_blocks},
+            ensure_ascii=False,
+            indent=2,
+        )
         extension = "json"
     elif export_format == "csv":
         table_block = next((block for block in blocks if block["type"] == "table"), None)
@@ -57,4 +64,4 @@ def render_export(payload: Dict[str, Any], export_format: str, title: str, sourc
         extension = "csv"
     else:
         raise ValueError("Unsupported export format")
-    return {"content": content, "mime_type": MIME_TYPES[export_format], "filename": f"{safe_title}.{extension}"}
+    return {"content": content, "mime_type": MIME_TYPES[export_format], "filename": f"{safe_title}.{extension}", "cleaned_count": len(removed_blocks)}

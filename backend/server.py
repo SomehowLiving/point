@@ -127,6 +127,7 @@ class ExportRequest(BaseModel):
     title: str = Field(default="Spatial AI extraction", max_length=200)
     source: SourceContext = Field(default_factory=SourceContext)
     payload: dict
+    clean: bool = False
 
 
 class AnalyzeRequest(BaseModel):
@@ -412,7 +413,7 @@ async def ocr_status():
 @api_router.post("/exports/render")
 async def export_render(request: ExportRequest):
     try:
-        return render_export(request.payload, request.format, request.title, request.source.model_dump())
+        return render_export(request.payload, request.format, request.title, request.source.model_dump(), request.clean)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

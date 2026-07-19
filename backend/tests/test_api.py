@@ -399,6 +399,38 @@ def test_export_mime_filename_and_non_empty_content(
     assert isinstance(payload["content"], str) and len(payload["content"].strip()) > 0
 
 
+def test_clean_copy_removes_boilerplate_and_reports_count():
+    words = [
+        {"region": 0, "text": "•", "confidence": 0.98, "box": {"x": 0, "y": 0, "width": 10, "height": 14}, "line_key": "0:0:0:0"},
+        {"region": 0, "text": "Home", "confidence": 0.98, "box": {"x": 14, "y": 0, "width": 40, "height": 14}, "line_key": "0:0:0:0"},
+        {"region": 0, "text": "•", "confidence": 0.98, "box": {"x": 0, "y": 16, "width": 10, "height": 14}, "line_key": "0:0:0:1"},
+        {"region": 0, "text": "About", "confidence": 0.98, "box": {"x": 14, "y": 16, "width": 40, "height": 14}, "line_key": "0:0:0:1"},
+        {"region": 0, "text": "Real", "confidence": 0.98, "box": {"x": 0, "y": 80, "width": 40, "height": 14}, "line_key": "0:1:0:0"},
+        {"region": 0, "text": "content", "confidence": 0.98, "box": {"x": 44, "y": 80, "width": 60, "height": 14}, "line_key": "0:1:0:0"},
+        {"region": 0, "text": "here.", "confidence": 0.98, "box": {"x": 108, "y": 80, "width": 40, "height": 14}, "line_key": "0:1:0:0"},
+    ]
+    dirty_response = requests.post(
+        f"{API_BASE}/exports/render",
+        json={"format": "text", "title": "Report", "source": {}, "payload": {"text": "", "words": words}},
+        timeout=30,
+    )
+    assert dirty_response.status_code == 200
+    dirty = dirty_response.json()
+    assert "Home" in dirty["content"] and "About" in dirty["content"]
+    assert dirty.get("cleaned_count", 0) == 0
+
+    clean_response = requests.post(
+        f"{API_BASE}/exports/render",
+        json={"format": "text", "title": "Report", "source": {}, "payload": {"text": "", "words": words}, "clean": True},
+        timeout=30,
+    )
+    assert clean_response.status_code == 200
+    cleaned = clean_response.json()
+    assert "Home" not in cleaned["content"] and "About" not in cleaned["content"]
+    assert "Real content here." in cleaned["content"]
+    assert cleaned["cleaned_count"] == 1
+
+
 def test_smart_copy_preserves_heading_and_paragraph_structure_in_markdown_and_html():
     words = [
         {"region": 0, "text": "Summary", "confidence": 0.98, "box": {"x": 0, "y": 0, "width": 140, "height": 30}, "line_key": "0:0:0:0"},
