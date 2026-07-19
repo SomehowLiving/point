@@ -1,7 +1,7 @@
-import { ArrowRight, Copy, MagnifyingGlass, Translate, TextAlignLeft, BracketsCurly, Scales, Sparkle } from "@phosphor-icons/react";
+import { ArrowRight, Copy, MagnifyingGlass, MagicWand, NotePencil, Question, Translate, TextAlignLeft, BracketsCurly, Scales, Sparkle } from "@phosphor-icons/react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-const actions = [{ id: "explain", label: "Explain", icon: Sparkle },{ id: "copy", label: "Copy", icon: Copy },{ id: "search", label: "Search", icon: MagnifyingGlass },{ id: "translate", label: "Translate", icon: Translate },{ id: "summarize", label: "Summarize", icon: TextAlignLeft },{ id: "extract", label: "Extract", icon: BracketsCurly },{ id: "compare", label: "Compare", icon: Scales }];
+const actions = [{ id: "ask", label: "Ask", icon: Question },{ id: "explain", label: "Explain", icon: Sparkle },{ id: "copy", label: "Copy", icon: Copy },{ id: "search", label: "Search", icon: MagnifyingGlass },{ id: "translate", label: "Translate", icon: Translate },{ id: "rewrite", label: "Rewrite", icon: NotePencil },{ id: "transform", label: "Transform", icon: MagicWand },{ id: "summarize", label: "Summarize", icon: TextAlignLeft },{ id: "extract", label: "Extract", icon: BracketsCurly },{ id: "compare", label: "Compare", icon: Scales }];
 
 const extractSchemas = [
   { id: "auto", label: "Auto" },

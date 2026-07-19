@@ -749,6 +749,32 @@ def test_build_prompt_omits_dom_ground_truth_note_when_no_dom_elements_present()
     assert context["selected_dom_elements"] == {"regions": [], "points": []}
 
 
+def test_build_prompt_rewrite_and_transform_actions_have_distinct_guides():
+    from server import build_prompt, AnalyzeRequest
+
+    rewrite_prompt = build_prompt(AnalyzeRequest(
+        image_data=SAMPLE_IMAGE_DATA_URL, mime_type="image/png",
+        instruction="make this more formal", action="rewrite", model="gpt-5.5",
+    ))
+    transform_prompt = build_prompt(AnalyzeRequest(
+        image_data=SAMPLE_IMAGE_DATA_URL, mime_type="image/png",
+        instruction="turn this into a ticket description", action="transform", model="gpt-5.5",
+    ))
+    assert "Rewrite the selected content" in rewrite_prompt
+    assert "Task mode: rewrite" in rewrite_prompt
+    assert "Transform the selected content" in transform_prompt
+    assert "Task mode: transform" in transform_prompt
+    assert rewrite_prompt != transform_prompt
+
+
+def test_analyze_request_accepts_rewrite_and_transform_actions():
+    from server import AnalyzeRequest
+
+    for action in ("rewrite", "transform"):
+        request = AnalyzeRequest(image_data=SAMPLE_IMAGE_DATA_URL, mime_type="image/png", instruction="do it", action=action, model="gpt-5.5")
+        assert request.action == action
+
+
 def test_build_prompt_includes_ocr_conflict_resolution_guidance_when_ocr_text_present():
     from server import build_prompt, AnalyzeRequest
 

@@ -142,7 +142,7 @@ class AnalyzeRequest(BaseModel):
     image_data: str
     mime_type: str
     instruction: str = Field(min_length=1, max_length=4000)
-    action: Literal["ask", "copy", "explain", "search", "translate", "summarize", "extract", "compare"] = "ask"
+    action: Literal["ask", "copy", "explain", "search", "translate", "summarize", "extract", "compare", "rewrite", "transform"] = "ask"
     extract_schema: Literal["auto", "table", "key_value", "contact_list", "task_list", "json_object"] = "auto"
     model: str = "gpt-5.5"
     regions: List[Region] = Field(default_factory=list, max_length=12)
@@ -301,6 +301,12 @@ def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] =
         "extract": _extract_action_guide(request.extract_schema),
         "compare": "Compare the numbered selected regions explicitly, listing similarities, differences, and a conclusion.",
         "ask": "Answer the instruction using only the supplied visual and source context. State uncertainty when needed.",
+        "rewrite": "Rewrite the selected content per the user instruction (e.g. simplify, make professional, shorten, "
+                   "improve grammar, change tone, turn into an email or message). Preserve the original meaning and "
+                   "return only the rewritten content — no commentary about what changed.",
+        "transform": "Transform the selected content into the format the user instruction names (e.g. notes, a "
+                     "ticket description, an email, a report, code, test cases, documentation). Return only the "
+                     "transformed artifact in that format, ready to use as-is.",
     }
     regions = [region.model_dump() for region in request.regions]
     annotations = [annotation.model_dump() for annotation in request.annotations]
