@@ -749,6 +749,38 @@ def test_build_prompt_omits_dom_ground_truth_note_when_no_dom_elements_present()
     assert context["selected_dom_elements"] == {"regions": [], "points": []}
 
 
+def test_build_prompt_includes_ocr_conflict_resolution_guidance_when_ocr_text_present():
+    from server import build_prompt, AnalyzeRequest
+
+    request = AnalyzeRequest(
+        image_data=SAMPLE_IMAGE_DATA_URL,
+        mime_type="image/png",
+        instruction="what does this say",
+        action="ask",
+        model="gpt-5.5",
+        source={"application": "Windows desktop", "window_title": "Notepad", "url": ""},
+        ocr_text="172 points by sebjones",
+    )
+    prompt = build_prompt(request)
+    assert "resolve using" in prompt
+    assert "deterministic_ocr" in prompt
+
+
+def test_build_prompt_omits_ocr_guidance_when_no_ocr_text():
+    from server import build_prompt, AnalyzeRequest
+
+    request = AnalyzeRequest(
+        image_data=SAMPLE_IMAGE_DATA_URL,
+        mime_type="image/png",
+        instruction="what does this say",
+        action="ask",
+        model="gpt-5.5",
+        source={"application": "Windows desktop", "window_title": "Notepad", "url": ""},
+    )
+    prompt = build_prompt(request)
+    assert "resolve using" not in prompt
+
+
 def _searxng_reachable() -> bool:
     searxng_url = os.environ.get("SEARXNG_URL", "http://localhost:8888")
     try:

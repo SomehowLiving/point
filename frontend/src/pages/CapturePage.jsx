@@ -10,6 +10,7 @@ import { ExtractionResult } from "@/components/ExtractionResult";
 import { Switch } from "@/components/ui/switch";
 import { orderedRegions, reorderBefore } from "@/lib/regionOrder";
 import { parseExtractionResult } from "@/lib/structuredExtraction";
+import { computeOcrKey } from "@/lib/ocrCache";
 
 const accepted = ["image/png", "image/jpeg", "image/webp"];
 const DEFAULT_VIEWPORT = { scale: 1, translateX: 0, translateY: 0 };
@@ -133,6 +134,13 @@ export default function CapturePage() {
   const [ocr, setOcr] = useState(null); const [ocrLoading, setOcrLoading] = useState(false); const nativeShell = isNativeShell();
   const [notionPage, setNotionPage] = useState(() => localStorage.getItem("notionPage") || "");
   const [sendingToNotion, setSendingToNotion] = useState(false);
+  // Tracks which (image, regions, redactions) triple the current `ocr` state was extracted
+  // from, so an AI action can tell a merely-present OCR result apart from a stale one (e.g. the
+  // user added a region or redaction since OCR last ran) and only re-run OCR when it actually
+  // needs to. ocrInFlightRef dedupes overlapping triggers (e.g. a rapid double-submit) onto the
+  // same in-flight request instead of firing OCR twice.
+  const ocrKeyRef = useRef(null);
+  const ocrInFlightRef = useRef(null);
   const fileRef = useRef(null);
   const loadFile = useCallback((file) => {
     if (!file || !accepted.includes(file.type)) return toast.error("Use a PNG, JPEG, or WEBP image");
@@ -151,7 +159,7 @@ export default function CapturePage() {
       const payload = event.data.payload;
       if (!payload?.screenshot) return;
       setImage(payload.screenshot); setMimeType(payload.mimeType || "image/png"); setSource(payload.source || source);
-      resetRegionState(); setViewport(DEFAULT_VIEWPORT); setResult(""); setSearchResults([]);
+      resetRegionState(); setViewport(DEFAULT_VIEWPORT); setResult(""); setSearchResults([]); setOcr(null);
       const sections = payload.source?.page_context?.full_page?.sections;
       toast.success(sections ? `Full page captured · ${sections} section${sections === 1 ? "" : "s"} stitched` : "Browser tab captured with page context");
     };
@@ -164,17 +172,44 @@ export default function CapturePage() {
     return () => stop();
   }, []);
   const runNativeCapture = async (mode) => { try { const payload=await captureNative(mode);setImage(payload.screenshot);setMimeType(payload.mime_type);setSource(payload.source);resetRegionState();setViewport(DEFAULT_VIEWPORT);setResult("");setSearchResults([]);setOcr(null);toast.success(mode==="all"?"All displays captured":"Active display captured"); } catch(error){toast.error(error.message);} };
+  const performOcr = async () => {
+    const protectedImage = await applyRedactions(image, mimeType, annotations);
+    return extractOcr({ image_data: protectedImage, mime_type: mimeType, engine: "auto", language: "eng", regions });
+  };
   const runOcr = async () => {
-    if(!image)return toast.error("Add a screenshot first");setOcrLoading(true);
-    try{const protectedImage=await applyRedactions(image,mimeType,annotations);const data=await extractOcr({image_data:protectedImage,mime_type:mimeType,engine:"auto",language:"eng",regions});setOcr(data);toast.success(`OCR complete · ${data.engine}`);}catch(error){toast.error(error.message);}finally{setOcrLoading(false);}
+    if (!image) return toast.error("Add a screenshot first");
+    setOcrLoading(true);
+    try {
+      const data = await performOcr();
+      setOcr(data); ocrKeyRef.current = computeOcrKey(image, regions, annotations);
+      toast.success(`OCR complete · ${data.engine}`);
+    } catch (error) { toast.error(error.message); } finally { setOcrLoading(false); }
+  };
+  // Auto-grounding: every AI action funnels through here first so it never silently skips OCR
+  // for a text-heavy capture. Reuses the cached result when the image/regions/redactions haven't
+  // changed since OCR last ran, dedupes concurrent callers onto one in-flight request, and never
+  // blocks the AI action on an OCR failure -- it just proceeds ungrounded and says so.
+  const ensureOcr = async () => {
+    if (!image) return null;
+    const key = computeOcrKey(image, regions, annotations);
+    if (ocr && ocrKeyRef.current === key) return ocr;
+    if (ocrInFlightRef.current) return ocrInFlightRef.current;
+    setOcrLoading(true);
+    const request = performOcr()
+      .then((data) => { setOcr(data); ocrKeyRef.current = key; return data; })
+      .catch(() => { toast.message("Text extraction failed. Continuing with image analysis only."); return null; })
+      .finally(() => { setOcrLoading(false); ocrInFlightRef.current = null; });
+    ocrInFlightRef.current = request;
+    return request;
   };
   const runAnalysis = async () => {
     if (!image) return toast.error("Add a screenshot first");
     if (!command.trim()) return toast.error("Give Spatial AI an instruction");
     setProcessing(true); setResult(""); setSearchResults([]);
     try {
+      const groundingOcr = await ensureOcr();
       const protectedImage = await applyRedactions(image, mimeType, annotations);
-      const completed = await analyzeCapture({ image_data:protectedImage, mime_type:mimeType, instruction:command.trim(), action, extract_schema:extractSchema, model, regions, annotations, points, private_mode:privateMode, source, ocr_text:ocr?.text||"" }, (delta) => setResult((current) => current + delta), (results) => setSearchResults(results || []));
+      const completed = await analyzeCapture({ image_data:protectedImage, mime_type:mimeType, instruction:command.trim(), action, extract_schema:extractSchema, model, regions, annotations, points, private_mode:privateMode, source, ocr_text:groundingOcr?.text||"" }, (delta) => setResult((current) => current + delta), (results) => setSearchResults(results || []));
       toast.success(completed?.saved ? "Analysis saved to history" : "Private analysis complete");
     } catch (error) { toast.error(error.message); } finally { setProcessing(false); }
   };

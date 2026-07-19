@@ -210,7 +210,7 @@ const DEFAULT_BACKEND_URL = "http://localhost:8001";
 // requires the background/service-worker context) — it asks the background script to do both and
 // relay back the final answer, reusing the exact same screenshot + page-context + analyze pipeline
 // the regular capture flow already uses.
-async function fetchLensAnalysis({ imageData, mimeType, instruction, point, source }) {
+async function fetchLensAnalysis({ imageData, mimeType, instruction, point, source, ocrText }) {
   const { backendUrl, lensModel } = await chrome.storage.local.get(["backendUrl", "lensModel"]);
   const base = (backendUrl || DEFAULT_BACKEND_URL).replace(/\/$/, "");
   const body = {
@@ -223,7 +223,7 @@ async function fetchLensAnalysis({ imageData, mimeType, instruction, point, sour
     points: [{ id: crypto.randomUUID(), x: point.x, y: point.y, label: null }],
     source,
     private_mode: true,
-    ocr_text: "",
+    ocr_text: ocrText || "",
   };
   if (lensModel) body.model = lensModel; // else the backend applies its own default
   const response = await fetch(`${base}/api/captures/analyze`, {
@@ -258,28 +258,81 @@ async function fetchLensAnalysis({ imageData, mimeType, instruction, point, sour
   return text || "(no response)";
 }
 
+// OCR grounding for Lens: reading small/dense text (labels, counts) straight from a screenshot
+// is meaningfully hallucination-prone for a vision model -- running real OCR first and passing
+// the extracted text along (see build_prompt's ocr_note in server.py) cuts that down a lot. OCR
+// failure never blocks the click-to-analyze flow; it just proceeds ungrounded and says so.
+async function fetchOcrForLens(imageData, mimeType) {
+  try {
+    const { backendUrl } = await chrome.storage.local.get("backendUrl");
+    const base = (backendUrl || DEFAULT_BACKEND_URL).replace(/\/$/, "");
+    const response = await fetch(`${base}/api/ocr/extract`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image_data: imageData, mime_type: mimeType, engine: "auto", language: "eng", regions: [] }),
+    });
+    if (!response.ok) throw new Error(`OCR failed (${response.status})`);
+    const data = await response.json();
+    return { text: data.text || "", status: "success" };
+  } catch (error) {
+    return { text: "", status: "error", error: error.message };
+  }
+}
+
+// One capture+OCR+page-context bundle per tab, cached so a follow-up question at the same point
+// (see lens.js's addFollowUpInput) reuses the exact same grounding instead of re-capturing the
+// screen and re-running OCR for what is, from the user's perspective, the same already-answered
+// spot. Best-effort only: this is an in-memory Map in a service worker, which Chrome can recycle
+// between clicks -- a lost cache just means the next "follow-up" silently re-grounds instead of
+// reusing, not a correctness bug.
+const lensGroundingByTab = new Map();
+const lensInFlightByTab = new Map();
+
+async function captureAndGroundForLens(tab) {
+  const [imageData, pageContext] = await Promise.all([
+    captureVisibleTabWithRetry(tab.windowId),
+    collectPageContext(tab, { fullDocument: false }),
+  ]);
+  const ocr = await fetchOcrForLens(imageData, "image/png");
+  return { imageData, mimeType: "image/png", pageContext, ocrText: ocr.text, ocrStatus: ocr.status };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type !== "LENS_ANALYZE" || !sender.tab) return false;
-  (async () => {
+  const tabId = sender.tab.id;
+  if (lensInFlightByTab.has(tabId)) {
+    sendResponse({ ok: false, error: "Another Lens request is already running for this tab." });
+    return false;
+  }
+  const run = (async () => {
     try {
-      const [imageData, pageContext] = await Promise.all([
-        captureVisibleTabWithRetry(sender.tab.windowId),
-        collectPageContext(sender.tab, { fullDocument: false }),
-      ]);
+      const grounding = message.reuseGrounding && lensGroundingByTab.has(tabId)
+        ? lensGroundingByTab.get(tabId)
+        : await captureAndGroundForLens(sender.tab);
+      lensGroundingByTab.set(tabId, grounding);
       const text = await fetchLensAnalysis({
-        imageData,
-        mimeType: "image/png",
+        imageData: grounding.imageData,
+        mimeType: grounding.mimeType,
         instruction: message.instruction || "Explain what's at this point.",
         point: message.point,
-        source: { application: "Google Chrome", window_title: sender.tab.title || "", url: sender.tab.url || "", page_context: pageContext },
+        source: { application: "Google Chrome", window_title: sender.tab.title || "", url: sender.tab.url || "", page_context: grounding.pageContext },
+        ocrText: grounding.ocrText,
       });
-      sendResponse({ ok: true, text });
+      sendResponse({ ok: true, text, ocrStatus: grounding.ocrStatus });
     } catch (error) {
       sendResponse({ ok: false, error: error.message });
+    } finally {
+      lensInFlightByTab.delete(tabId);
     }
   })();
+  lensInFlightByTab.set(tabId, run);
   return true; // keep the message channel open for the async sendResponse above
 });
+
+// A navigated or closed tab invalidates any cached Lens grounding for it -- the "same frame"
+// that grounding was captured from no longer exists.
+chrome.tabs.onRemoved.addListener((tabId) => lensGroundingByTab.delete(tabId));
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => { if (changeInfo.status === "loading") lensGroundingByTab.delete(tabId); });
 
 chrome.action.onClicked.addListener((tab) => openCaptureFlow(tab));
 chrome.commands.onCommand.addListener(async (command) => {

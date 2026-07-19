@@ -323,12 +323,25 @@ def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] =
         if selected_dom_elements["regions"] or selected_dom_elements["points"]
         else ""
     )
+    # Reading small/dense text (counts, prices, table cells) from pixels alone is meaningfully
+    # hallucination-prone — deterministic_ocr exists to ground exactly that case. But OCR itself
+    # can misread a character, so this is additional grounding, not a silent replacement for
+    # looking at the image: tell the model explicitly to use both and prefer the image on conflict.
+    ocr_note = (
+        "deterministic_ocr contains text extracted from the image via OCR — treat it as strong grounding for "
+        "exact wording, counts, and small text that's hard to read from pixels alone, but OCR can misread individual "
+        "characters. Use both the image and deterministic_ocr together, and where they conflict, resolve using "
+        "the image.\n"
+        if request.ocr_text.strip()
+        else ""
+    )
     return (
         "You are the Spatial AI Context Layer. Analyze the screenshot and prioritize only the user-marked regions. "
         "Each entry in points_normalized_to_image marks one exact location the user pointed at (not an area) — "
         "ground your answer specifically on what is at that coordinate. "
         "Redacted areas are intentionally unavailable and must never be inferred. "
         f"{dom_note}"
+        f"{ocr_note}"
         f"Task mode: {request.action}. {action_guides[request.action]}\n\n"
         f"User instruction: {request.instruction}\n\n"
         f"Structured context bundle:\n{json.dumps(context, ensure_ascii=False)}"

@@ -181,11 +181,25 @@ let lensTest = { ok: false };
     }
     const quotaLimited = QUOTA_ERROR_PATTERN.test(resultText || "");
     const followUpInputVisible = await page.evaluate(() => Boolean(document.getElementById("spatial-ai-lens-host")?.shadowRoot?.querySelector(".panel input")));
+
+    // The panel only ever surfaces an OCR *failure* note, never confirmation of OCR success --
+    // call background.js's own captureAndGroundForLens() directly in the service worker's scope
+    // (Playwright's serviceWorkers() gives real eval access to it) to confirm grounding actually
+    // ran, not just that Lens produced an answer through some other path.
+    const groundingCheck = await worker.evaluate(async (targetUrl) => {
+      const tabs = await chrome.tabs.query({});
+      const tab = tabs.find((item) => item.url?.startsWith(targetUrl.split("/").slice(0, 3).join("/")) && !item.url.includes("localhost:3000"));
+      const grounding = await captureAndGroundForLens(tab);
+      return { ocrStatus: grounding.ocrStatus, ocrTextLength: grounding.ocrText.length };
+    }, url);
+
     lensTest = {
-      ok: badgeVisible && Boolean(resultText) && resultText !== "Thinking…" && (quotaLimited || !/analysis failed|extension was reloaded/i.test(resultText || "")),
+      ok: badgeVisible && Boolean(resultText) && resultText !== "Thinking…" && (quotaLimited || !/analysis failed|extension was reloaded/i.test(resultText || "")) && groundingCheck.ocrStatus === "success",
       badge_visible: badgeVisible,
       quota_limited: quotaLimited,
       follow_up_input_visible: followUpInputVisible,
+      ocr_status: groundingCheck.ocrStatus,
+      ocr_text_length: groundingCheck.ocrTextLength,
       result_text: (resultText || "").slice(0, 200),
       duration_ms: Date.now() - started,
     };

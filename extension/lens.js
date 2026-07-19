@@ -28,6 +28,7 @@
       .panel .close:hover { color: #fff; }
       .panel .body { white-space: pre-wrap; margin: 6px 0 8px; max-height: 220px; overflow: auto; }
       .panel .loading { color: #8b8b95; font-style: italic; }
+      .panel .ocr-note { color: #8b8b95; font-size: 11px; margin: -4px 0 8px; }
       .panel input { width: 100%; box-sizing: border-box; background: #0d0d11; border: 1px solid #2a2a33; color: #e4e4e7; border-radius: 6px; padding: 6px 8px; font: inherit; }
       .panel input:focus { outline: 1px solid #34d399; }
       .pin { position: fixed; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: #34d399; border: 2px solid #fff; box-shadow: 0 0 0 3px rgba(52,211,153,.35); pointer-events: none; }
@@ -61,12 +62,14 @@
     input.placeholder = "Ask a follow-up…";
     input.addEventListener("keydown", (event) => {
       event.stopPropagation();
-      if (event.key === "Enter" && input.value.trim()) runAnalysis(clientX, clientY, normX, normY, input.value.trim());
+      // A follow-up is about the same already-captured point, so it reuses that capture's
+      // screenshot + OCR grounding (reuseGrounding=true) instead of re-capturing the screen.
+      if (event.key === "Enter" && input.value.trim()) runAnalysis(clientX, clientY, normX, normY, input.value.trim(), true);
     });
     panelElement.appendChild(input);
   }
 
-  function runAnalysis(clientX, clientY, normX, normY, instruction) {
+  function runAnalysis(clientX, clientY, normX, normY, instruction, reuseGrounding = false) {
     closePanel();
     ensureOverlay();
     const pin = document.createElement("div");
@@ -89,11 +92,17 @@
       if (lastError) { body.textContent = lastError; return; }
       if (!response?.ok) { body.textContent = response?.error || "Analysis failed."; return; }
       body.textContent = response.text;
+      if (response.ocrStatus === "error") {
+        const note = document.createElement("div");
+        note.className = "ocr-note";
+        note.textContent = "(text extraction failed — answered from the image only)";
+        body.after(note);
+      }
       addFollowUpInput(panel, clientX, clientY, normX, normY);
     };
 
     try {
-      chrome.runtime.sendMessage({ type: "LENS_ANALYZE", point: { x: normX, y: normY }, instruction }, (response) => {
+      chrome.runtime.sendMessage({ type: "LENS_ANALYZE", point: { x: normX, y: normY }, instruction, reuseGrounding }, (response) => {
         respond(response, chrome.runtime.lastError?.message);
       });
     } catch (error) {
