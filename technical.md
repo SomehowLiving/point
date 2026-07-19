@@ -1356,3 +1356,224 @@ A change is complete when:
 8. Release review is updated.
 9. Technical handoff notes are updated.
 10. Known limitations are documented without overstating validation.
+
+---
+
+## 28. Architecture Diagrams
+
+Sections 1–27 above describe the original MVP scope. Since then the product has grown a
+provider-agnostic AI layer, real web search, layout-preserving/clean smart copy, schema-based
+structured extraction, browser DOM grounding, full-page scrolling capture, a click-to-analyze
+Real-Time Lens, auto-OCR grounding, a Notion send integration, and a completed AI-actions set.
+The diagrams below document the system as it actually runs today.
+
+### 28.1 System architecture
+
+```mermaid
+graph TB
+    subgraph clients["Client surfaces"]
+        WebApp["React web app<br/>:3000"]
+        Extension["Chrome extension"]
+        Desktop["Tauri desktop shell<br/>(optional)"]
+    end
+
+    subgraph ext_internals["Extension internals"]
+        Background["background.js<br/>(service worker)"]
+        Lens["lens.js<br/>(content script, per-page)"]
+        Bridge["bridge.js<br/>(content script, dashboard only)"]
+        Options["options.html/js<br/>(dashboardUrl, backendUrl, lensModel)"]
+    end
+
+    subgraph backend["Backend :8001 (FastAPI)"]
+        API["server.py<br/>(routes, prompt building, model routing)"]
+        OCRService["ocr_service.py<br/>(Tesseract / PaddleOCR)"]
+        LayoutService["layout_service.py<br/>(blocks, clean_blocks)"]
+        ExportService["export_service.py"]
+        NotionService["notion_service.py"]
+    end
+
+    subgraph external["External services"]
+        Mongo[("MongoDB<br/>capture history")]
+        SearXNG["SearXNG :8888"]
+        OpenAI["OpenAI"]
+        Gemini["Google Gemini"]
+        OpenRouter["OpenRouter"]
+        Groq["Groq"]
+        NotionAPI["api.notion.com"]
+    end
+
+    WebApp <--> API
+    Extension --> Background
+    Background --> Lens
+    Background --> Bridge
+    Background --> Options
+    Bridge -. postMessage .-> WebApp
+    Background -- "capture + OCR + analyze" --> API
+
+    API --> Mongo
+    API --> SearXNG
+    API --> OpenAI
+    API --> Gemini
+    API --> OpenRouter
+    API --> Groq
+    API --> OCRService
+    API --> LayoutService
+    API --> ExportService
+    API --> NotionService
+    NotionService --> NotionAPI
+
+    Desktop -. "Windows monitor capture (Tauri IPC)" .-> WebApp
+```
+
+### 28.2 Capture → result pipeline (the core loop)
+
+```mermaid
+flowchart TD
+    Start(["User initiates a capture"]) --> Source{"Capture source?"}
+    Source -->|"Extension: viewport"| ExtCapture["chrome.tabs.captureVisibleTab"]
+    Source -->|"Extension: full page"| FullPage["Scroll + stitch<br/>(see 28.5)"]
+    Source -->|"Desktop"| NativeCapture["Tauri monitor capture"]
+    Source -->|"Upload / paste"| FileUpload["Local file"]
+
+    ExtCapture --> DomCollect["collectPageContext():<br/>dom_elements, headings, links, visible_text"]
+    FullPage --> DomCollect
+    DomCollect --> Dashboard["Delivered to CapturePage.jsx<br/>via postMessage or Tauri event"]
+    NativeCapture --> Dashboard
+    FileUpload --> Dashboard
+
+    Dashboard --> Select["User draws region / point / lasso mask"]
+    Select --> Action["User picks an AI action + instruction"]
+    Action --> EnsureOCR{"ensureOcr():<br/>cached OCR still valid for<br/>this image+regions+redactions?"}
+    EnsureOCR -->|"stale or missing"| RunOCR["POST /api/ocr/extract"]
+    EnsureOCR -->|"fresh"| SkipOCR["Reuse cached OCR"]
+    RunOCR --> Redact["applyRedactions()<br/>blacks out redaction annotations first"]
+    SkipOCR --> Redact
+    Redact --> Analyze["POST /api/captures/analyze"]
+
+    Analyze --> BuildPrompt["build_prompt():<br/>regions + points + annotations +<br/>selected_dom_elements + deterministic_ocr +<br/>web_search_results (search action only)"]
+    BuildPrompt --> Route{"provider for<br/>selected model"}
+    Route -->|"OpenAI / OpenRouter / Groq"| OpenAICompatible["AsyncOpenAI streaming<br/>(shared OpenAI-compatible wire format)"]
+    Route -->|"Gemini"| GeminiStream["google-genai streaming"]
+    OpenAICompatible --> SSE["SSE: delta events"]
+    GeminiStream --> SSE
+    SSE --> UI["Result panel renders streamed text<br/>(or ExtractionResult / search-sources UI)"]
+    UI --> Save{"private_mode?"}
+    Save -->|"false"| History[("Saved to MongoDB<br/>capture history")]
+    Save -->|"true"| Ephemeral["Not persisted"]
+    UI -.->|"optional"| NotionSend["POST /api/integrations/notion/send"]
+```
+
+### 28.3 AI action routing
+
+Ten actions share one prompt-building path (`build_prompt` in `server.py`); each contributes its
+own instruction from `action_guides`, and every action receives the same structured context
+bundle (regions, points, annotations, DOM grounding, OCR text).
+
+```mermaid
+flowchart LR
+    Instruction["User instruction + selected action"] --> Guides{"action_guides lookup"}
+
+    Guides -->|ask| Ask["Grounded Q&A on the exact<br/>region/point selected"]
+    Guides -->|explain| Explain["Explain, grounding every<br/>claim in visible evidence"]
+    Guides -->|copy| Copy["Recover text precisely,<br/>preserving layout"]
+    Guides -->|search| Search["Cite REAL SearXNG results<br/>for an OCR-extracted query"]
+    Guides -->|translate| Translate["Translate, preserve<br/>headings/lists/tables/tone"]
+    Guides -->|rewrite| Rewrite["Simplify / formalize /<br/>shorten / change tone"]
+    Guides -->|transform| Transform["Convert to notes / ticket /<br/>email / report / code / tests / docs"]
+    Guides -->|summarize| Summarize["Key facts, decisions,<br/>open questions"]
+    Guides -->|extract| Extract["Schema-constrained JSON:<br/>table / key_value / contacts / tasks / json_object"]
+    Guides -->|compare| Compare["Multi-region similarities,<br/>differences, conclusion"]
+
+    Search -.-> SearXNGCall["search_web() via httpx"]
+    SearXNGCall -.-> SearchResultsEvent["search_results SSE event,<br/>sent before the answer streams"]
+
+    Ask & Explain & Copy & Translate & Rewrite & Transform & Summarize & Extract & Compare --> ContextBundle
+    SearchResultsEvent --> ContextBundle
+
+    ContextBundle["Structured context bundle:<br/>regions_normalized_to_image, points_normalized_to_image,<br/>annotations, selected_dom_elements,<br/>deterministic_ocr, web_search_results"] --> ProviderCall["Send prompt + image<br/>to the selected provider"]
+```
+
+### 28.4 Real-Time Lens (click-to-analyze overlay)
+
+A Lens click and any follow-up question at the same point share one capture+OCR "grounding" —
+captured once, reused for follow-ups, invalidated on tab navigation/close.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant LensJS as lens.js (content script)
+    participant BG as background.js (service worker)
+    participant OCR as /api/ocr/extract
+    participant Analyze as /api/captures/analyze
+
+    User->>LensJS: Alt+Shift+L (toggle)
+    LensJS->>LensJS: Build shadow-DOM overlay + badge
+    User->>LensJS: Click on the page (capture-phase intercept)
+    LensJS->>BG: LENS_ANALYZE {point, instruction, reuseGrounding:false}
+
+    alt no cached grounding for this tab
+        BG->>BG: captureVisibleTab + collectPageContext (viewport mode)
+        BG->>OCR: extract text from the screenshot
+        OCR-->>BG: ocr_text, ocr_status
+        BG->>BG: cache {screenshot, ocrText, pageContext} per tabId
+    end
+
+    BG->>Analyze: image + point + ocr_text + dom context, private_mode:true
+    Analyze-->>BG: streamed SSE, accumulated into one answer
+    BG-->>LensJS: {ok, text, ocrStatus}
+    LensJS-->>User: Render answer in floating panel + follow-up input
+
+    User->>LensJS: Types a follow-up question
+    LensJS->>BG: LENS_ANALYZE {reuseGrounding:true}
+    BG->>BG: Reuse cached screenshot + OCR (no re-capture)
+    BG->>Analyze: Same image/ocr, new instruction
+    Analyze-->>BG: Streamed answer
+    BG-->>LensJS: {ok, text}
+    LensJS-->>User: Updated panel
+
+    Note over BG: Cache cleared on chrome.tabs.onRemoved /<br/>onUpdated(status:"loading") for that tab.
+```
+
+### 28.5 Full-page scrolling capture
+
+```mermaid
+flowchart TD
+    Trigger["Alt+Shift+F (capture-full-page command)"] --> Metrics["Measure scrollHeight / viewportHeight<br/>via executeScript"]
+    Metrics --> Check{"scrollHeight ><br/>viewportHeight × 1.05?"}
+    Check -->|no| SingleShot["Fall back to a normal<br/>single-viewport capture"]
+    Check -->|yes| HideFixed["Hide fixed/sticky elements<br/>(would otherwise repeat per section)"]
+    HideFixed --> Loop["Scroll loop, capped at 25 steps"]
+    Loop --> Scroll["scrollTo next viewport offset"]
+    Scroll --> Wait["Wait ~350ms for repaint / lazy-load"]
+    Wait --> Shot["captureVisibleTab, retried on<br/>MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND"]
+    Shot --> Loop
+    Loop -->|all sections captured| Restore["Restore fixed elements +<br/>original scroll position"]
+    Restore --> Stitch["Draw every section onto one<br/>OffscreenCanvas at its true scroll offset"]
+    Stitch --> Budget{"Encoded PNG > 7 MB?<br/>(backend caps raw bytes at 8 MB)"}
+    Budget -->|yes| JPEGFallback["Re-encode as JPEG,<br/>decreasing quality until it fits"]
+    Budget -->|no| KeepPNG["Keep PNG"]
+    JPEGFallback --> Deliver
+    KeepPNG --> Deliver
+    SingleShot --> Deliver["pendingCapture + full_page metadata<br/>delivered to the dashboard tab"]
+
+    Deliver -.-> DomNote["collectPageContext() runs AFTER stitching,<br/>in fullDocument mode: dom_elements are<br/>document-relative, matching the stitched image"]
+```
+
+### 28.6 Smart copy / Clean copy export pipeline
+
+```mermaid
+flowchart TD
+    OCRWords["OCR word boxes<br/>(text, box, confidence, line_key)"] --> AnalyzeLayout["analyze_layout()<br/>(layout_service.py)"]
+    AnalyzeLayout --> Blocks["Structured blocks:<br/>heading / paragraph / list / table / code"]
+    Blocks --> CleanFlag{"clean:true in<br/>ExportRequest?"}
+    CleanFlag -->|yes| CleanBlocks["clean_blocks():<br/>strip nav/footer/ad-pattern blocks<br/>and exact-duplicate blocks"]
+    CleanFlag -->|no| SkipClean["Use blocks as-is"]
+    CleanBlocks --> Render
+    SkipClean --> Render
+    Render{"requested format"} -->|text| TextOut["blocks_to_text()"]
+    Render -->|markdown| MarkdownOut["blocks_to_markdown()"]
+    Render -->|html| HtmlOut["blocks_to_html()"]
+    Render -->|json| JsonOut["structure + removed_boilerplate"]
+    Render -->|csv| CsvOut["table rows, or word-box dump<br/>if no table block detected"]
+    TextOut & MarkdownOut & HtmlOut & JsonOut & CsvOut --> Deliver["ExportBar: copy (rich clipboard<br/>for HTML) or download"]
+```
