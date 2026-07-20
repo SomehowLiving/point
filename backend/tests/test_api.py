@@ -455,7 +455,7 @@ def test_create_github_issue_rejects_unparseable_repo_regardless_of_configuratio
 
 def test_create_github_issue_reports_missing_configuration():
     # Same runtime-detection approach as the Notion "missing configuration" test above: whether
-    # GITHUB_TOKEN is set is a property of the server process under test, not this pytest process.
+    # GITHUB_PAT_TOKEN is set is a property of the server process under test, not this pytest process.
     response = requests.post(
         f"{API_BASE}/integrations/github/create-issue",
         json={"title": "Test", "content": "Body", "repo": "octocat/Hello-World"},
@@ -463,14 +463,14 @@ def test_create_github_issue_reports_missing_configuration():
     )
     if response.status_code != 503:
         pytest.skip("GitHub is configured on the server under test; this scenario only applies when it isn't")
-    assert "GITHUB_TOKEN" in response.json()["detail"]
+    assert "GITHUB_PAT_TOKEN" in response.json()["detail"]
 
 
 @pytest.mark.integration
 def test_create_github_issue_creates_a_real_issue():
     repo = os.environ.get("GITHUB_TEST_REPO")
-    if not os.environ.get("GITHUB_TOKEN") or not repo:
-        pytest.skip("Requires GITHUB_TOKEN and GITHUB_TEST_REPO (a repo the token can create issues in) to run live")
+    if not os.environ.get("GITHUB_PAT_TOKEN") or not repo:
+        pytest.skip("Requires GITHUB_PAT_TOKEN and GITHUB_TEST_REPO (a repo the token can create issues in) to run live")
     marker = f"TEST_GITHUB_ISSUE_{uuid.uuid4().hex[:8]}"
     response = requests.post(
         f"{API_BASE}/integrations/github/create-issue",

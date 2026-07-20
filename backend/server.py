@@ -551,9 +551,9 @@ async def create_github_issue(request: GitHubCreateIssueRequest):
     if not repo:
         raise HTTPException(status_code=400, detail="Could not find an owner/repo in that value")
     owner, repo_name = repo
-    token = os.environ.get("GITHUB_TOKEN")
+    token = os.environ.get("GITHUB_PAT_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
-        raise HTTPException(status_code=503, detail="GitHub integration is not configured (missing GITHUB_TOKEN)")
+        raise HTTPException(status_code=503, detail="GitHub integration is not configured (missing GITHUB_PAT_TOKEN)")
     payload = build_issue_payload(request.title, request.content, request.source_url, request.labels or None)
     try:
         async with httpx.AsyncClient(timeout=15) as http_client:
