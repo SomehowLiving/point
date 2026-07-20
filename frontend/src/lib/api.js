@@ -75,3 +75,9 @@ export async function sendToNotion(payload) {
   if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.detail || "Sending to Notion failed"); }
   return response.json();
 }
+
+export async function createGitHubIssue(payload) {
+  const response = await fetch(`${API}/integrations/github/create-issue`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.detail || "Creating the GitHub issue failed"); }
+  return response.json();
+}

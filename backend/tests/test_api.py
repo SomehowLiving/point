@@ -444,6 +444,46 @@ def test_send_to_notion_creates_a_real_page():
     assert "notion" in payload["url"]
 
 
+def test_create_github_issue_rejects_unparseable_repo_regardless_of_configuration():
+    response = requests.post(
+        f"{API_BASE}/integrations/github/create-issue",
+        json={"title": "Test", "content": "Body", "repo": "not a repo"},
+        timeout=15,
+    )
+    assert response.status_code == 400
+
+
+def test_create_github_issue_reports_missing_configuration():
+    # Same runtime-detection approach as the Notion "missing configuration" test above: whether
+    # GITHUB_TOKEN is set is a property of the server process under test, not this pytest process.
+    response = requests.post(
+        f"{API_BASE}/integrations/github/create-issue",
+        json={"title": "Test", "content": "Body", "repo": "octocat/Hello-World"},
+        timeout=15,
+    )
+    if response.status_code != 503:
+        pytest.skip("GitHub is configured on the server under test; this scenario only applies when it isn't")
+    assert "GITHUB_TOKEN" in response.json()["detail"]
+
+
+@pytest.mark.integration
+def test_create_github_issue_creates_a_real_issue():
+    repo = os.environ.get("GITHUB_TEST_REPO")
+    if not os.environ.get("GITHUB_TOKEN") or not repo:
+        pytest.skip("Requires GITHUB_TOKEN and GITHUB_TEST_REPO (a repo the token can create issues in) to run live")
+    marker = f"TEST_GITHUB_ISSUE_{uuid.uuid4().hex[:8]}"
+    response = requests.post(
+        f"{API_BASE}/integrations/github/create-issue",
+        json={"title": marker, "content": "Created by an automated test.", "source_url": "https://example.test", "repo": repo, "labels": []},
+        timeout=30,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["issue_number"]
+    assert payload["url"].startswith("https://github.com/")
+
+
 def test_clean_copy_removes_boilerplate_and_reports_count():
     words = [
         {"region": 0, "text": "•", "confidence": 0.98, "box": {"x": 0, "y": 0, "width": 10, "height": 14}, "line_key": "0:0:0:0"},

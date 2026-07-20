@@ -25,6 +25,7 @@ import httpx
 from ocr_service import extract_ocr
 from export_service import render_export
 from notion_service import NOTION_API_VERSION, build_notion_page_payload, parse_notion_page_id
+from github_service import GITHUB_API_VERSION, build_issue_payload, parse_github_repo
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -136,6 +137,14 @@ class NotionSendRequest(BaseModel):
     content: str = Field(min_length=1, max_length=100000)
     source_url: str = Field(default="", max_length=2000)
     parent_page: str = Field(min_length=1, max_length=2000)
+
+
+class GitHubCreateIssueRequest(BaseModel):
+    title: str = Field(default="Point capture", max_length=256)
+    content: str = Field(min_length=1, max_length=60000)
+    source_url: str = Field(default="", max_length=2000)
+    repo: str = Field(min_length=1, max_length=400)
+    labels: List[str] = Field(default_factory=list, max_length=10)
 
 
 class CaptureSource(BaseModel):
@@ -534,6 +543,39 @@ async def send_to_notion(request: NotionSendRequest):
         raise HTTPException(status_code=response.status_code, detail=f"Notion error: {detail}")
     created = response.json()
     return {"ok": True, "page_id": created.get("id"), "url": created.get("url")}
+
+
+@api_router.post("/integrations/github/create-issue")
+async def create_github_issue(request: GitHubCreateIssueRequest):
+    repo = parse_github_repo(request.repo)
+    if not repo:
+        raise HTTPException(status_code=400, detail="Could not find an owner/repo in that value")
+    owner, repo_name = repo
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        raise HTTPException(status_code=503, detail="GitHub integration is not configured (missing GITHUB_TOKEN)")
+    payload = build_issue_payload(request.title, request.content, request.source_url, request.labels or None)
+    try:
+        async with httpx.AsyncClient(timeout=15) as http_client:
+            response = await http_client.post(
+                f"https://api.github.com/repos/{owner}/{repo_name}/issues",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": GITHUB_API_VERSION,
+                },
+                json=payload,
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach GitHub: {exc}") from exc
+    if response.status_code >= 400:
+        try:
+            detail = response.json().get("message", response.text)
+        except ValueError:
+            detail = response.text
+        raise HTTPException(status_code=response.status_code, detail=f"GitHub error: {detail}")
+    created = response.json()
+    return {"ok": True, "issue_number": created.get("number"), "url": created.get("html_url")}
 
 
 SYSTEM_MESSAGE = "You are a precise multimodal assistant for visual screen context. Never reveal hidden or redacted content."
