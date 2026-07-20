@@ -695,7 +695,7 @@ def test_build_prompt_matches_region_to_overlapping_dom_element():
     )
     prompt = build_prompt(request)
     context = json.loads(prompt.split("Structured context bundle:\n", 1)[1])
-    matched = context["selected_dom_elements"]["regions"]
+    matched = context["sources"][0]["selected_dom_elements"]["regions"]
     assert len(matched) == 1
     assert matched[0]["region_id"] == "r1"
     assert matched[0]["elements"] == [{"tag": "button", "text": "Buy now"}]
@@ -726,7 +726,7 @@ def test_build_prompt_matches_point_to_nearest_dom_element():
     )
     prompt = build_prompt(request)
     context = json.loads(prompt.split("Structured context bundle:\n", 1)[1])
-    matched = context["selected_dom_elements"]["points"]
+    matched = context["sources"][0]["selected_dom_elements"]["points"]
     assert matched[0]["point_id"] == "p1"
     assert matched[0]["elements"][0]["text"] == "Buy now"
 
@@ -746,7 +746,7 @@ def test_build_prompt_omits_dom_ground_truth_note_when_no_dom_elements_present()
     prompt = build_prompt(request)
     assert "ground truth" not in prompt
     context = json.loads(prompt.split("Structured context bundle:\n", 1)[1])
-    assert context["selected_dom_elements"] == {"regions": [], "points": []}
+    assert context["sources"][0]["selected_dom_elements"] == {"regions": [], "points": []}
 
 
 def test_build_prompt_rewrite_and_transform_actions_have_distinct_guides():
@@ -773,6 +773,111 @@ def test_analyze_request_accepts_rewrite_and_transform_actions():
     for action in ("rewrite", "transform"):
         request = AnalyzeRequest(image_data=SAMPLE_IMAGE_DATA_URL, mime_type="image/png", instruction="do it", action=action, model="gpt-5.5")
         assert request.action == action
+
+
+def test_build_prompt_builds_sources_array_with_primary_and_additional_sources():
+    from server import build_prompt, AnalyzeRequest
+
+    request = AnalyzeRequest(
+        image_data=SAMPLE_IMAGE_DATA_URL,
+        mime_type="image/png",
+        instruction="does the browser error match the terminal log?",
+        action="ask",
+        model="gpt-5.5",
+        regions=[{"id": "r1", "x": 0.1, "y": 0.1, "width": 0.2, "height": 0.1, "label": ""}],
+        source={"application": "Google Chrome", "window_title": "App", "url": "https://example.test"},
+        additional_sources=[
+            {
+                "id": "s1",
+                "label": "Terminal",
+                "image_data": SAMPLE_IMAGE_DATA_URL,
+                "mime_type": "image/png",
+                "regions": [{"id": "r2", "x": 0.2, "y": 0.2, "width": 0.3, "height": 0.1, "label": ""}],
+                "ocr_text": "ERROR: connection refused on port 5432",
+                "source": {"application": "Windows Terminal", "window_title": "psql", "url": ""},
+            }
+        ],
+    )
+    prompt = build_prompt(request)
+    context = json.loads(prompt.split("Structured context bundle:\n", 1)[1])
+    assert len(context["sources"]) == 2
+    assert context["sources"][0]["label"] == "Primary"
+    assert context["sources"][0]["regions_normalized_to_image"][0]["id"] == "r1"
+    assert context["sources"][1]["label"] == "Terminal"
+    assert context["sources"][1]["regions_normalized_to_image"][0]["id"] == "r2"
+    assert context["sources"][1]["deterministic_ocr"] == "ERROR: connection refused on port 5432"
+    assert "Reason across all of them together" in prompt
+
+
+def test_build_prompt_omits_multi_source_note_for_a_single_source():
+    from server import build_prompt, AnalyzeRequest
+
+    request = AnalyzeRequest(image_data=SAMPLE_IMAGE_DATA_URL, mime_type="image/png", instruction="explain", action="ask", model="gpt-5.5")
+    prompt = build_prompt(request)
+    context = json.loads(prompt.split("Structured context bundle:\n", 1)[1])
+    assert len(context["sources"]) == 1
+    assert "Reason across all of them together" not in prompt
+
+
+def test_additional_sources_capped_at_three_and_validates_mime_type():
+    from pydantic import ValidationError
+    from server import AnalyzeRequest
+
+    def source(i):
+        return {"id": f"s{i}", "image_data": SAMPLE_IMAGE_DATA_URL, "mime_type": "image/png"}
+
+    request = AnalyzeRequest(
+        image_data=SAMPLE_IMAGE_DATA_URL, mime_type="image/png", instruction="x", action="ask", model="gpt-5.5",
+        additional_sources=[source(1), source(2), source(3)],
+    )
+    assert len(request.additional_sources) == 3
+
+    with pytest.raises(ValidationError):
+        AnalyzeRequest(
+            image_data=SAMPLE_IMAGE_DATA_URL, mime_type="image/png", instruction="x", action="ask", model="gpt-5.5",
+            additional_sources=[source(1), source(2), source(3), source(4)],
+        )
+
+    with pytest.raises(ValidationError):
+        AnalyzeRequest(
+            image_data=SAMPLE_IMAGE_DATA_URL, mime_type="image/png", instruction="x", action="ask", model="gpt-5.5",
+            additional_sources=[{"id": "bad", "image_data": SAMPLE_IMAGE_DATA_URL, "mime_type": "application/pdf"}],
+        )
+
+
+@pytest.mark.integration
+def test_analyze_with_additional_source_streams_successfully():
+    marker = "TEST_MULTI_SOURCE_ANALYZE"
+    response = requests.post(
+        f"{API_BASE}/captures/analyze",
+        json={
+            "image_data": SAMPLE_IMAGE_DATA_URL,
+            "mime_type": "image/png",
+            "instruction": f"{marker}: do these two sources look related?",
+            "action": "ask",
+            "model": "openrouter",
+            "regions": [],
+            "annotations": [],
+            "source": {"application": "Web dashboard", "window_title": "TEST primary", "url": "https://example.test/primary"},
+            "private_mode": True,
+            "additional_sources": [
+                {
+                    "id": "s1",
+                    "label": "Terminal",
+                    "image_data": SAMPLE_IMAGE_DATA_URL,
+                    "mime_type": "image/png",
+                    "source": {"application": "Windows Terminal", "window_title": "TEST terminal", "url": ""},
+                }
+            ],
+        },
+        timeout=180,
+        stream=True,
+    )
+    assert response.status_code == 200
+    events = _stream_events(response)
+    _skip_if_provider_unavailable(events)
+    done = next((event for event in events if event.get("type") == "done"), None)
+    assert done is not None
 
 
 def test_build_prompt_includes_ocr_conflict_resolution_guidance_when_ocr_text_present():

@@ -16,7 +16,7 @@ import io
 import json
 import re
 from pydantic import BaseModel, Field, ConfigDict, field_validator
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Tuple
 import uuid
 from datetime import datetime, timezone
 from openai import AsyncOpenAI
@@ -138,6 +138,29 @@ class NotionSendRequest(BaseModel):
     parent_page: str = Field(min_length=1, max_length=2000)
 
 
+class CaptureSource(BaseModel):
+    """An extra image to reason across alongside the primary capture — e.g. a terminal window or
+    a dashboard, captured separately from the primary browser/desktop screenshot (README 5.5,
+    "cross-screen selection"). Mirrors AnalyzeRequest's own per-image fields (regions/annotations/
+    points/source/ocr_text) so each source is independently selectable and OCR-grounded."""
+    id: str
+    label: str = Field(default="", max_length=80)
+    image_data: str
+    mime_type: str
+    regions: List[Region] = Field(default_factory=list, max_length=12)
+    annotations: List[Annotation] = Field(default_factory=list, max_length=30)
+    points: List[Point] = Field(default_factory=list, max_length=12)
+    source: SourceContext = Field(default_factory=SourceContext)
+    ocr_text: str = Field(default="", max_length=100000)
+
+    @field_validator("mime_type")
+    @classmethod
+    def validate_source_mime_type(cls, value: str) -> str:
+        if value not in SUPPORTED_MIME_TYPES:
+            raise ValueError("Only PNG, JPEG, and WEBP images are supported")
+        return value
+
+
 class AnalyzeRequest(BaseModel):
     image_data: str
     mime_type: str
@@ -151,6 +174,10 @@ class AnalyzeRequest(BaseModel):
     source: SourceContext = Field(default_factory=SourceContext)
     private_mode: bool = False
     ocr_text: str = Field(default="", max_length=100000)
+    # Capped at 3 (4 sources total with the primary) to keep combined request size and provider
+    # payload limits reasonable -- the README's own cross-screen example names exactly 3 sources
+    # (browser, terminal, dashboard).
+    additional_sources: List[CaptureSource] = Field(default_factory=list, max_length=3)
 
     @field_validator("mime_type")
     @classmethod
@@ -272,20 +299,40 @@ def _dom_elements_for_point(dom_elements: List[dict], point: dict, limit: int = 
     return [_compact_dom_element(element) for _, _, element in scored[:limit]]
 
 
-def _selected_dom_elements(request: "AnalyzeRequest") -> dict:
-    page_context = request.source.page_context or {}
+def _selected_dom_elements(source_context: SourceContext, regions: List[Region], points: List[Point]) -> dict:
+    page_context = source_context.page_context or {}
     dom_elements = page_context.get("dom_elements")
     if not isinstance(dom_elements, list) or not dom_elements:
         return {"regions": [], "points": []}
     return {
         "regions": [
             {"region_id": region.id, "elements": _dom_elements_for_region(dom_elements, region.model_dump())}
-            for region in request.regions
+            for region in regions
         ],
         "points": [
             {"point_id": point.id, "elements": _dom_elements_for_point(dom_elements, point.model_dump())}
-            for point in request.points
+            for point in points
         ],
+    }
+
+
+def _source_bundle(
+    index: int,
+    label: str,
+    regions: List[Region],
+    annotations: List[Annotation],
+    points: List[Point],
+    ocr_text: str,
+    source_context: SourceContext,
+) -> dict:
+    return {
+        "label": label or f"Source {index + 1}",
+        "source": source_context.model_dump(),
+        "regions_normalized_to_image": [region.model_dump() for region in regions],
+        "annotations": [annotation.model_dump() for annotation in annotations],
+        "points_normalized_to_image": [point.model_dump() for point in points],
+        "selected_dom_elements": _selected_dom_elements(source_context, regions, points),
+        "deterministic_ocr": ocr_text,
     }
 
 
@@ -308,44 +355,56 @@ def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] =
                      "ticket description, an email, a report, code, test cases, documentation). Return only the "
                      "transformed artifact in that format, ready to use as-is.",
     }
-    regions = [region.model_dump() for region in request.regions]
-    annotations = [annotation.model_dump() for annotation in request.annotations]
-    points = [point.model_dump() for point in request.points]
-    selected_dom_elements = _selected_dom_elements(request)
+
+    # sources[0] is always the primary capture; sources[1:] are additional cross-screen sources
+    # (README 5.5) — e.g. a terminal window or a dashboard captured separately from the primary
+    # browser/desktop screenshot. Same order as the images actually attached to the provider call.
+    sources = [_source_bundle(0, "Primary", request.regions, request.annotations, request.points, request.ocr_text, request.source)]
+    for index, extra in enumerate(request.additional_sources, start=1):
+        sources.append(_source_bundle(index, extra.label, extra.regions, extra.annotations, extra.points, extra.ocr_text, extra.source))
+
     context = {
-        "source": request.source.model_dump(),
-        "regions_normalized_to_image": regions,
-        "annotations": annotations,
-        "points_normalized_to_image": points,
-        "selected_dom_elements": selected_dom_elements,
-        "deterministic_ocr": request.ocr_text,
+        "sources": sources,
         "web_search_results": search_results or [],
     }
+    any_dom = any(bundle["selected_dom_elements"]["regions"] or bundle["selected_dom_elements"]["points"] for bundle in sources)
     dom_note = (
-        "selected_dom_elements maps each region_id/point_id to the REAL DOM element(s) (tag, role, text, href) "
-        "under it, captured by the browser extension at screenshot time — this is ground truth about the browser "
-        "content, not a visual guess, and should be preferred over inferring an element's identity from pixels alone. "
-        "It is only present for browser-extension captures; treat it as absent (not a signal) otherwise.\n"
-        if selected_dom_elements["regions"] or selected_dom_elements["points"]
+        "Each source's selected_dom_elements maps its region_id/point_id to the REAL DOM element(s) (tag, role, "
+        "text, href) under it, captured by the browser extension at screenshot time — this is ground truth about "
+        "the browser content, not a visual guess, and should be preferred over inferring an element's identity "
+        "from pixels alone. It is only present for browser-extension captures; treat it as absent (not a signal) "
+        "otherwise.\n"
+        if any_dom
         else ""
     )
     # Reading small/dense text (counts, prices, table cells) from pixels alone is meaningfully
     # hallucination-prone — deterministic_ocr exists to ground exactly that case. But OCR itself
     # can misread a character, so this is additional grounding, not a silent replacement for
     # looking at the image: tell the model explicitly to use both and prefer the image on conflict.
+    any_ocr = any(bundle["deterministic_ocr"].strip() for bundle in sources)
     ocr_note = (
-        "deterministic_ocr contains text extracted from the image via OCR — treat it as strong grounding for "
-        "exact wording, counts, and small text that's hard to read from pixels alone, but OCR can misread individual "
-        "characters. Use both the image and deterministic_ocr together, and where they conflict, resolve using "
-        "the image.\n"
-        if request.ocr_text.strip()
+        "Each source's deterministic_ocr contains text extracted from its image via OCR — treat it as strong "
+        "grounding for exact wording, counts, and small text that's hard to read from pixels alone, but OCR can "
+        "misread individual characters. Use both the image and deterministic_ocr together, and where they "
+        "conflict, resolve using the image.\n"
+        if any_ocr
         else ""
     )
+    multi_source_note = (
+        f'There are {len(sources)} sources in the "sources" array below, in the SAME ORDER as the images attached '
+        "to this message (sources[0] is the first image, sources[1] is the second, and so on) — e.g. a browser "
+        "error, a terminal log line, and a dashboard status, captured separately. Reason across all of them "
+        "together when the instruction calls for it, rather than only looking at the first one.\n"
+        if len(sources) > 1
+        else ""
+    )
+
     return (
-        "You are the Spatial AI Context Layer. Analyze the screenshot and prioritize only the user-marked regions. "
-        "Each entry in points_normalized_to_image marks one exact location the user pointed at (not an area) — "
-        "ground your answer specifically on what is at that coordinate. "
+        "You are the Spatial AI Context Layer. Analyze the provided screenshot(s) and prioritize only the "
+        "user-marked regions. Each entry in a source's points_normalized_to_image marks one exact location the "
+        "user pointed at (not an area) — ground your answer specifically on what is at that coordinate. "
         "Redacted areas are intentionally unavailable and must never be inferred. "
+        f"{multi_source_note}"
         f"{dom_note}"
         f"{ocr_note}"
         f"Task mode: {request.action}. {action_guides[request.action]}\n\n"
@@ -480,20 +539,17 @@ async def send_to_notion(request: NotionSendRequest):
 SYSTEM_MESSAGE = "You are a precise multimodal assistant for visual screen context. Never reveal hidden or redacted content."
 
 
-async def stream_openai_deltas(model_name: str, api_key: str, prompt: str, mime_type: str, image_payload: str, base_url: Optional[str] = None):
+async def stream_openai_deltas(model_name: str, api_key: str, prompt: str, images: List[Tuple[str, str]], base_url: Optional[str] = None):
     client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    content = [{"type": "text", "text": prompt}]
+    for mime_type, image_payload in images:
+        content.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_payload}"}})
     stream = await client.chat.completions.create(
         model=model_name,
         stream=True,
         messages=[
             {"role": "system", "content": SYSTEM_MESSAGE},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_payload}"}},
-                ],
-            },
+            {"role": "user", "content": content},
         ],
     )
     async for chunk in stream:
@@ -502,17 +558,15 @@ async def stream_openai_deltas(model_name: str, api_key: str, prompt: str, mime_
             yield delta
 
 
-async def stream_gemini_deltas(model_name: str, api_key: str, prompt: str, mime_type: str, image_payload: str):
+async def stream_gemini_deltas(model_name: str, api_key: str, prompt: str, images: List[Tuple[str, str]]):
     from google import genai
     from google.genai import types
 
     client = genai.Client(api_key=api_key)
+    parts = [types.Part.from_bytes(data=base64.b64decode(image_payload), mime_type=mime_type) for mime_type, image_payload in images]
     stream = await client.aio.models.generate_content_stream(
         model=model_name,
-        contents=[
-            types.Part.from_bytes(data=base64.b64decode(image_payload), mime_type=mime_type),
-            prompt,
-        ],
+        contents=[*parts, prompt],
         config=types.GenerateContentConfig(system_instruction=SYSTEM_MESSAGE),
     )
     async for chunk in stream:
@@ -529,6 +583,12 @@ async def analyze_capture(request: AnalyzeRequest):
         raise HTTPException(status_code=503, detail="AI service is not configured")
 
     image_payload = canonical_image_base64(raw_image)
+    # Additional sources (README 5.5, cross-screen selection) ride along for this one analyze
+    # call only -- their full images aren't persisted to capture history, to avoid every saved
+    # capture growing by however many extra screenshots it was reasoned against.
+    images: List[Tuple[str, str]] = [("image/png", image_payload)]
+    for extra in request.additional_sources:
+        images.append(("image/png", canonical_image_base64(parse_image_data(extra.image_data))))
 
     async def event_stream():
         collected = []
@@ -539,9 +599,9 @@ async def analyze_capture(request: AnalyzeRequest):
                 yield f"data: {json.dumps({'type': 'search_results', 'results': search_results})}\n\n"
             prompt = build_prompt(request, search_results)
             deltas = (
-                stream_openai_deltas(model_name, api_key, prompt, "image/png", image_payload, base_url=OPENAI_COMPATIBLE_BASE_URLS[provider])
+                stream_openai_deltas(model_name, api_key, prompt, images, base_url=OPENAI_COMPATIBLE_BASE_URLS[provider])
                 if provider in OPENAI_COMPATIBLE_BASE_URLS
-                else stream_gemini_deltas(model_name, api_key, prompt, "image/png", image_payload)
+                else stream_gemini_deltas(model_name, api_key, prompt, images)
             )
             async for content in deltas:
                 collected.append(content)
