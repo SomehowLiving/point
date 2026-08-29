@@ -210,17 +210,17 @@ const DEFAULT_BACKEND_URL = "http://localhost:8001";
 // requires the background/service-worker context) — it asks the background script to do both and
 // relay back the final answer, reusing the exact same screenshot + page-context + analyze pipeline
 // the regular capture flow already uses.
-async function fetchLensAnalysis({ imageData, mimeType, instruction, point, source, ocrText }) {
+async function fetchLensAnalysis({ imageData, mimeType, instruction, points, regions, action, source, ocrText }) {
   const { backendUrl, lensModel } = await chrome.storage.local.get(["backendUrl", "lensModel"]);
   const base = (backendUrl || DEFAULT_BACKEND_URL).replace(/\/$/, "");
   const body = {
     image_data: imageData,
     mime_type: mimeType,
     instruction,
-    action: "explain",
-    regions: [],
+    action: action || "explain",
+    regions: (regions || []).map((region) => ({ id: crypto.randomUUID(), x: region.x, y: region.y, width: region.width, height: region.height, label: null })),
     annotations: [],
-    points: [{ id: crypto.randomUUID(), x: point.x, y: point.y, label: null }],
+    points: (points || []).map((point) => ({ id: crypto.randomUUID(), x: point.x, y: point.y, label: null })),
     source,
     private_mode: true,
     ocr_text: ocrText || "",
@@ -314,7 +314,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         imageData: grounding.imageData,
         mimeType: grounding.mimeType,
         instruction: message.instruction || "Explain what's at this point.",
-        point: message.point,
+        points: message.points,
+        regions: message.regions,
+        action: message.action,
         source: { application: "Google Chrome", window_title: sender.tab.title || "", url: sender.tab.url || "", page_context: grounding.pageContext },
         ocrText: grounding.ocrText,
       });
