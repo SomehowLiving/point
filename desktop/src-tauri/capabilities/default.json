@@ -2,7 +2,10 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capture workspace permissions",
-  "windows": ["capture"],
+  "windows": [
+    "capture",
+    "snip"
+  ],
   "permissions": [
     "core:default",
     "clipboard-manager:allow-write-text",

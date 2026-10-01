@@ -12,6 +12,31 @@ export async function captureNative(mode = "active") {
   return invoke(mode === "all" ? "capture_all_monitors" : "capture_active_monitor");
 }
 
+// Snip overlay (Alt+Shift+S in the desktop app): the shell freezes the monitor under the cursor and
+// shows it full-screen in the "snip" window. The latest frame is also pulled on mount in case the
+// overlay finished loading after the event fired.
+export async function listenForSnip(handler) {
+  if (!isNativeShell()) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  const { invoke } = await import("@tauri-apps/api/core");
+  const unlisten = await listen("spatial-snip-capture", (event) => handler(event.payload));
+  const pending = await invoke("get_snip_capture").catch(() => null);
+  if (pending) handler(pending);
+  return unlisten;
+}
+
+export async function closeSnip() {
+  if (!isNativeShell()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke("close_snip");
+}
+
+export async function openSnipInPoint(capture) {
+  if (!isNativeShell()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke("open_snip_in_point", { capture });
+}
+
 export async function writeClipboard(text) {
   if (isNativeShell()) {
     const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");

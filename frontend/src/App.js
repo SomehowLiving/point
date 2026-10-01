@@ -7,19 +7,22 @@ import CapturePage from "@/pages/CapturePage";
 import HistoryPage from "@/pages/HistoryPage";
 import PlatformsPage from "@/pages/PlatformsPage";
 import SettingsPage from "@/pages/SettingsPage";
+import SnipPage from "@/pages/SnipPage";
 
 export default function App() {
   return (
     <BrowserRouter>
-      <AppShell>
-        <Routes>
+      <Routes>
+        {/* The desktop snip overlay is full-screen chrome-less, so it lives outside the app shell. */}
+        <Route path="/snip" element={<SnipPage />} />
+        <Route path="*" element={<AppShell><Routes>
           <Route path="/" element={<Navigate to="/capture" replace />} />
           <Route path="/capture" element={<CapturePage />} />
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/platforms" element={<PlatformsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
-        </Routes>
-      </AppShell>
+        </Routes></AppShell>} />
+      </Routes>
       <Toaster position="bottom-right" richColors />
     </BrowserRouter>
   );

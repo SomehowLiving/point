@@ -1,12 +1,12 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use image::{imageops, DynamicImage, ImageBuffer, ImageFormat, Rgba, RgbaImage};
 use serde::Serialize;
-use std::{env, fs, io::Cursor, path::Path, process, thread, time::Duration};
-use tauri::{Emitter, Manager, WebviewWindow};
+use std::{env, fs, io::Cursor, path::Path, process, sync::Mutex, thread, time::Duration};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewWindow};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use xcap::Monitor;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, serde::Deserialize)]
 struct DisplayInfo {
     id: u32,
     name: String,
@@ -23,7 +23,7 @@ struct DisplayInfo {
     metadata_matches_capture: Option<bool>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, serde::Deserialize)]
 struct NativeSource {
     application: String,
     window_title: String,
@@ -31,7 +31,7 @@ struct NativeSource {
     displays: Vec<DisplayInfo>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, serde::Deserialize)]
 struct NativeCapture {
     screenshot: String,
     mime_type: String,
@@ -343,6 +343,83 @@ fn capture_all_monitors(window: WebviewWindow) -> Result<NativeCapture, String> 
     Ok(capture)
 }
 
+/// Latest frozen-screen snip, kept so the overlay can pull it on mount if it missed the event.
+#[derive(Default)]
+struct SnipState(Mutex<Option<NativeCapture>>);
+
+/// Snipping-Tool-style flow: freeze the monitor under the cursor, then cover exactly that monitor
+/// with the borderless "snip" overlay showing the frozen frame, so selection happens in place.
+fn start_snip(app: &AppHandle) -> Result<(), String> {
+    let snip = app
+        .get_webview_window("snip")
+        .ok_or("snip overlay window is missing")?;
+    if snip.is_visible().unwrap_or(false) {
+        return Ok(());
+    }
+    let cursor = snip.cursor_position().map_err(|error| error.to_string())?;
+    let monitor = Monitor::from_point(cursor.x as i32, cursor.y as i32)
+        .map_err(|error| error.to_string())?;
+    let (x, y) = (
+        monitor.x().map_err(|error| error.to_string())?,
+        monitor.y().map_err(|error| error.to_string())?,
+    );
+    let capture = capture_monitor(monitor)?;
+    let (width, height) = capture
+        .source
+        .displays
+        .first()
+        .map(|display| {
+            (
+                display.capture_width.unwrap_or(display.width),
+                display.capture_height.unwrap_or(display.height),
+            )
+        })
+        .unwrap_or((1920, 1080));
+    *app.state::<SnipState>().0.lock().unwrap() = Some(capture.clone());
+    snip.set_position(PhysicalPosition::new(x, y))
+        .map_err(|error| error.to_string())?;
+    snip.set_size(PhysicalSize::new(width, height))
+        .map_err(|error| error.to_string())?;
+    snip.emit("spatial-snip-capture", capture)
+        .map_err(|error| error.to_string())?;
+    snip.show().map_err(|error| error.to_string())?;
+    let _ = snip.set_always_on_top(true);
+    let _ = snip.set_focus();
+    Ok(())
+}
+
+#[tauri::command]
+fn get_snip_capture(state: State<SnipState>) -> Option<NativeCapture> {
+    state.0.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn close_snip(app: AppHandle, state: State<SnipState>) -> Result<(), String> {
+    *state.0.lock().unwrap() = None;
+    if let Some(snip) = app.get_webview_window("snip") {
+        snip.hide().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+/// Hand a snip (with the user's selection) to the full Point workspace for the heavier tools.
+#[tauri::command]
+fn open_snip_in_point(app: AppHandle, capture: serde_json::Value) -> Result<(), String> {
+    if let Some(snip) = app.get_webview_window("snip") {
+        let _ = snip.hide();
+    }
+    let window = app
+        .get_webview_window("capture")
+        .ok_or("capture window is missing")?;
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.maximize();
+    let _ = window.set_focus();
+    window
+        .emit("spatial-native-capture", capture)
+        .map_err(|error| error.to_string())
+}
+
 fn main() {
     let dpi_enabled = enable_per_monitor_v2();
     if let Some(index) = env::args().position(|argument| argument == "--hardware-report") {
@@ -363,16 +440,15 @@ fn main() {
         eprintln!("Per-Monitor V2 DPI awareness could not be enabled");
     }
     tauri::Builder::default()
+        .manage(SnipState::default())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
                     let capture_shortcut =
                         Shortcut::new(Some(Modifiers::ALT | Modifiers::SHIFT), Code::KeyS);
                     if shortcut == &capture_shortcut && event.state() == ShortcutState::Pressed {
-                        if let Some(window) = app.get_webview_window("capture") {
-                            if let Ok(capture) = capture_active_monitor(window.clone()) {
-                                let _ = window.emit("spatial-native-capture", capture);
-                            }
+                        if let Err(error) = start_snip(app) {
+                            eprintln!("snip failed: {error}");
                         }
                     }
                 })
@@ -387,7 +463,10 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             list_monitors,
             capture_active_monitor,
-            capture_all_monitors
+            capture_all_monitors,
+            get_snip_capture,
+            close_snip,
+            open_snip_in_point
         ])
         .run(tauri::generate_context!())
         .expect("Spatial AI desktop shell failed");
