@@ -159,15 +159,27 @@ export const CaptureCanvas = forwardRef(({ image, regions, setRegions, annotatio
   useEffect(() => {
     if (!ref.current) return undefined;
     const node = ref.current;
+    // contentRect.left/top are padding offsets, not viewport position — read the real rect, and
+    // re-read on scroll/resize since layout shifts above the canvas move it without resizing it.
+    const refreshRect = () => {
+      const rect = node.getBoundingClientRect();
+      containerRectRef.current = { left: rect.left, top: rect.top };
+    };
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (entry) {
         setContainerSize({ width: entry.contentRect.width, height: entry.contentRect.height });
-        containerRectRef.current = { left: entry.contentRect.left, top: entry.contentRect.top };
+        refreshRect();
       }
     });
     observer.observe(node);
-    return () => observer.disconnect();
+    window.addEventListener("scroll", refreshRect, { capture: true, passive: true });
+    window.addEventListener("resize", refreshRect);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("scroll", refreshRect, { capture: true });
+      window.removeEventListener("resize", refreshRect);
+    };
   }, []);
 
   // Auto-fit on load, and re-fit on container resize as long as the user hasn't manually
@@ -279,6 +291,10 @@ export const CaptureCanvas = forwardRef(({ image, regions, setRegions, annotatio
   // not a gesture) is implicit — it never reaches here since nothing is pressed.
   const onPointerDown = (event) => {
     if (!image) return;
+    // One layout read per gesture keeps the cached origin exact even if something above the canvas
+    // (source strip, banners) shifted it without a scroll or resize.
+    const rect = event.currentTarget.getBoundingClientRect();
+    containerRectRef.current = { left: rect.left, top: rect.top };
     // Two-finger touch is always navigation (pinch-to-zoom + two-finger pan), regardless of the
     // active tool or any single-finger gesture already in progress — the second finger arriving
     // safely abandons whatever single-touch draw/move was underway, same as any other tool switch
