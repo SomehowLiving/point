@@ -5,6 +5,7 @@ import { CommandBar } from "@/components/CommandBar";
 import Markdown from "@/components/Markdown";
 import { analyzeCapture, extractOcr } from "@/lib/api";
 import { closeSnip, listenForSnip, openSnipInPoint, writeClipboard } from "@/lib/native";
+import { dockPlacement } from "@/lib/snipPlacement";
 
 // Snipping-Tool-style overlay for the desktop app: the shell freezes the screen and shows it here
 // full-screen. Drag to select a region (repeat for more), click to drop a point, then ask without
@@ -19,7 +20,6 @@ const DEFAULT_INSTRUCTIONS = {
 };
 const CLICK_SLOP = 6; // px — a drag shorter than this is a click, which drops a point instead
 const clamp01 = (value) => Math.min(1, Math.max(0, value));
-
 export default function SnipPage() {
   const [capture, setCapture] = useState(null);
   const [regions, setRegions] = useState([]);
@@ -32,6 +32,8 @@ export default function SnipPage() {
   const [processing, setProcessing] = useState(false);
   const [result, setResult] = useState("");
   const [resultAction, setResultAction] = useState("explain");
+  const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
+  const [barHeight, setBarHeight] = useState(120);
   const stageRef = useRef(null);
   const inputFocusRef = useRef(null);
 
@@ -47,6 +49,21 @@ export default function SnipPage() {
     window.__pointSnip = load; // lets the browser build (and tests) drive the overlay without the shell
     return () => { unlisten(); delete window.__pointSnip; };
   }, [load]);
+
+  useEffect(() => {
+    const onResize = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // The command bar's height changes with the extract-schema strip, so measure it instead of guessing.
+  useEffect(() => {
+    const bar = inputFocusRef.current?.querySelector(".command-dock");
+    if (!bar) return undefined;
+    const observer = new ResizeObserver(() => setBarHeight(bar.offsetHeight || 120));
+    observer.observe(bar);
+    return () => observer.disconnect();
+  });
 
   const dismiss = useCallback(async () => { reset(); setCapture(null); await closeSnip(); }, [reset]);
 
@@ -107,15 +124,11 @@ export default function SnipPage() {
   const copy = async () => { await writeClipboard(result); toast.success("Copied"); };
   const openInPoint = async () => { const payload = capture; reset(); setCapture(null); await openSnipInPoint(payload); };
 
-  // Anchor the command bar under the most recent selection, flipping above it near the bottom edge.
+  // Place the dock next to the most recent selection: below it if there's room, else above, else
+  // inside it near the bottom (a near-full-screen selection leaves no room outside). Always clamped
+  // to the visible screen; the answer card is capped to whatever height remains.
   const anchor = regions.length ? regions[regions.length - 1] : points.length ? { ...points[points.length - 1], width: 0, height: 0 } : null;
-  const below = anchor ? anchor.y + anchor.height < 0.62 : true;
-  const anchorStyle = anchor ? {
-    left: `clamp(16px, calc(${(anchor.x + anchor.width / 2) * 100}% - 330px), calc(100% - 676px))`,
-    ...(below ? { top: `calc(${(anchor.y + anchor.height) * 100}% + 14px)` } : { bottom: `calc(${(1 - anchor.y) * 100}% + 30px)` }),
-    // the answer card grows toward the screen edge, so cap it to the space left on that side
-    "--snip-room": `max(160px, calc(${(below ? 1 - anchor.y - anchor.height : anchor.y) * 100}vh - 200px))`,
-  } : null;
+  const anchorStyle = anchor ? dockPlacement(anchor, viewport, barHeight) : null;
   const live = drag && { x: Math.min(drag.start.x, drag.end.x), y: Math.min(drag.start.y, drag.end.y), width: Math.abs(drag.end.x - drag.start.x), height: Math.abs(drag.end.y - drag.start.y) };
   const pct = (box) => ({ left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.width * 100}%`, height: `${box.height * 100}%` });
   const hasSelection = regions.length > 0 || points.length > 0;
