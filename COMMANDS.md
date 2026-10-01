@@ -1,5 +1,7 @@
 # Running Point locally — command reference
 
+> For how to use Point (desktop snip overlay, extension, workspace) and a list of what's built, see [GUIDE.md](GUIDE.md).
+
 Everything Point needs runs on your own machine: MongoDB and SearXNG in Docker, the backend and
 frontend natively (so PowerShell/Windows-only pieces like Tesseract and Tauri native capture work
 correctly), and the Chrome extension loaded unpacked. No cloud dependency, no Emergent.

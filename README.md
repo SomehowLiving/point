@@ -13,6 +13,7 @@ No more screenshot, crop, upload, explain. Point lets you draw over any region o
 
 ## What it does
 
+- **Snip overlay (desktop):** Alt+Shift+S anywhere → screen freezes → drag, ask, answer in place
 - **Select:** region, freehand, point, multi-region, and cross-screen selection
 - **Understand:** OCR, layout and table extraction, context-aware explanations
 - **Act:** explain, summarize, translate, copy as a clean format, create a GitHub issue
@@ -30,7 +31,8 @@ No more screenshot, crop, upload, explain. Point lets you draw over any region o
 
 ## Run locally
 
-See [COMMANDS.md](COMMANDS.md).
+- **How to use it, and what's built:** [GUIDE.md](GUIDE.md)
+- **Command reference:** [COMMANDS.md](COMMANDS.md)
 
 ## Full product spec
 
