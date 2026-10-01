@@ -55,6 +55,12 @@ Build Tools** (`winget install Microsoft.VisualStudio.2022.BuildTools` with the 
 with C++* workload). The debug build loads the UI from `localhost:3000`, so the frontend must be
 running.
 
+### Or install it
+
+Download the `.exe` (or `.msi`) from [Releases](../../releases/latest) and run it. Point then
+starts from the Start menu. You still need the backend from step 2 running, with
+`http://tauri.localhost` included in `CORS_ORIGINS` in `backend\.env`.
+
 ### Chrome extension
 
 1. Open `chrome://extensions` and turn on **Developer mode**.
@@ -194,9 +200,12 @@ as formatted text.
 - **Open in Point** doesn't carry the snip selection over. You redraw it in the workspace.
 - The snip overlay freezes one monitor (the one under the cursor), not all of them.
 - The snip overlay doesn't have Lasso, Draw or Redact yet. Use Open in Point for those.
-- Release builds require a code-signing certificate (`WINDOWS_CERT_PATH`, `WINDOWS_CERT_PASSWORD`,
-  `TIMESTAMP_URL`). Without one, `build-windows.ps1` and the release workflow will fail at the
-  signing step. Local `cargo run` doesn't need it.
+- Installers are **unsigned** unless a code-signing certificate is configured, so Windows
+  SmartScreen shows "Windows protected your PC". Click **More info → Run anyway**. To sign, set
+  the repo secrets `WINDOWS_CERT_BASE64` (the base64-encoded `.pfx`), `WINDOWS_CERT_PASSWORD` and
+  `TIMESTAMP_URL`.
+- The installed app still needs the backend running locally on port 8001, and `CORS_ORIGINS` in
+  `backend\.env` must include `http://tauri.localhost` (the installed app's origin).
 - The installers' release build reads the UI from `frontend/build`. Run `yarn build` first if you
   build outside the script.
 

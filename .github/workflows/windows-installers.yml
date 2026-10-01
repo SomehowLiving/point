@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   package:
-    runs-on: [self-hosted, windows, x64]
+    runs-on: windows-latest
+    env:
+      WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -18,8 +20,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with: {workspaces: desktop/src-tauri}
-      - name: Build, sign, and verify NSIS + MSI
+      - name: Restore signing certificate (optional)
+        if: env.WINDOWS_CERT_BASE64 != ''
         shell: powershell
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP "signing.pfx"
+          [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:WINDOWS_CERT_BASE64))
+          "WINDOWS_CERT_PATH=$path" >> $env:GITHUB_ENV
+      - name: Build NSIS + MSI (signed when a certificate is configured)
+        shell: powershell
+        env:
+          # The installed app talks to the backend you run locally (see GUIDE.md).
+          REACT_APP_BACKEND_URL: http://localhost:8001
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          TIMESTAMP_URL: ${{ secrets.TIMESTAMP_URL }}
         run: .\desktop\build-windows.ps1
       - uses: actions/upload-artifact@v4
         with:

@@ -2,10 +2,10 @@ $ErrorActionPreference = "Stop"
 $DesktopRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent $DesktopRoot
 
-foreach ($name in @("WINDOWS_CERT_PATH", "WINDOWS_CERT_PASSWORD", "TIMESTAMP_URL")) {
-  if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-    throw "Required signing environment variable $name is missing."
-  }
+$Signed = -not (@("WINDOWS_CERT_PATH", "WINDOWS_CERT_PASSWORD", "TIMESTAMP_URL") |
+  Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
+if (-not $Signed) {
+  Write-Warning "No signing certificate configured: building UNSIGNED installers (SmartScreen will warn on install)."
 }
 
 Write-Host "Building Spatial AI frontend..." -ForegroundColor Cyan
@@ -32,13 +32,13 @@ if (-not $artifacts) { throw "No Windows installers were produced." }
 
 $manifest = foreach ($artifact in $artifacts) {
   $signature = Get-AuthenticodeSignature -FilePath $artifact.FullName
-  if ($signature.Status -ne "Valid") { throw "Invalid installer signature: $($artifact.FullName)" }
+  if ($Signed -and $signature.Status -ne "Valid") { throw "Invalid installer signature: $($artifact.FullName)" }
   [ordered]@{
     file = $artifact.FullName
     size_bytes = $artifact.Length
     sha256 = (Get-FileHash -Algorithm SHA256 -Path $artifact.FullName).Hash
     signature_status = $signature.Status.ToString()
-    signer = $signature.SignerCertificate.Subject
+    signer = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { $null }
     timestamp = if ($signature.TimeStamperCertificate) { $signature.TimeStamperCertificate.Subject } else { $null }
   }
 }

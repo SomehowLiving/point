@@ -5,10 +5,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-foreach ($name in @("WINDOWS_CERT_PATH", "WINDOWS_CERT_PASSWORD", "TIMESTAMP_URL")) {
-  if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-    throw "Required signing environment variable $name is missing."
-  }
+# Signing is optional: with no certificate configured the artifact is left unsigned (Windows
+# SmartScreen will warn on install). Configure all three variables to produce signed builds.
+$missing = @("WINDOWS_CERT_PATH", "WINDOWS_CERT_PASSWORD", "TIMESTAMP_URL") |
+  Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) }
+if ($missing) {
+  Write-Warning "Skipping code signing for $ArtifactPath (not set: $($missing -join ', '))."
+  exit 0
 }
 
 $certificatePath = [Environment]::GetEnvironmentVariable("WINDOWS_CERT_PATH")
