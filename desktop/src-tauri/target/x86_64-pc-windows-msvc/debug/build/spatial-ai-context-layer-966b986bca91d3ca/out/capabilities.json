@@ -1,1 +1,0 @@
-{"default":{"identifier":"default","description":"Capture workspace permissions","local":true,"windows":["capture"],"permissions":["core:default","clipboard-manager:allow-write-text","clipboard-manager:allow-read-text"]}}

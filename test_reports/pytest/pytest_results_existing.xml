@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="0" skipped="0" tests="1" time="0.506" timestamp="2026-07-10T10:17:43.759905+00:00" hostname="agent-env-fe969d40-3c99-4204-8e66-d1c06431448a"><testcase classname="" name="tests.test_api" time="0.000"><error message="collection failure">ImportError while importing test module '/app/backend/tests/test_api.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_api.py:3: in &lt;module&gt;
-    from server import app
-E   ModuleNotFoundError: No module named 'server'</error></testcase></testsuite></testsuites>
