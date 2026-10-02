@@ -8,7 +8,7 @@ built. For the raw command reference see [COMMANDS.md](COMMANDS.md); for the pro
 
 ## 0. Just want to use it?
 
-1. Download **`Point_x64-setup.exe`** from [Releases](../../releases/latest) and run it.
+1. Download the **`…_x64-setup.exe`** file from [Releases](../../releases/latest) and run it.
 2. Open **Point** from the Start menu → **Settings** → paste an API key for at least one AI
    provider (OpenAI, Gemini, OpenRouter or Groq) → **Save keys**.
 3. Press **`Alt+Shift+S`** anywhere and ask about what's on your screen.
