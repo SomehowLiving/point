@@ -81,3 +81,16 @@ export async function createGitHubIssue(payload) {
   if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.detail || "Creating the GitHub issue failed"); }
   return response.json();
 }
+// API keys / tokens stored by the local backend (settings.json in the user's Point data folder).
+// Reads only ever return whether a key is set and its last 4 characters, never the key.
+export async function getSettings() {
+  const response = await fetch(`${API}/settings`, { cache: "no-store" });
+  if (!response.ok) throw new Error("Settings could not be loaded. Is the Point backend running?");
+  return response.json();
+}
+
+export async function saveSettings(keys) {
+  const response = await fetch(`${API}/settings`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keys }) });
+  if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.detail || "Settings could not be saved"); }
+  return response.json();
+}

@@ -17,6 +17,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: {node-version: "22", cache: "yarn", cache-dependency-path: frontend/yarn.lock}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Install Tesseract (bundled into the installer)
+        shell: powershell
+        run: choco install tesseract -y --no-progress
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with: {workspaces: desktop/src-tauri}
@@ -30,8 +35,6 @@ jobs:
       - name: Build NSIS + MSI (signed when a certificate is configured)
         shell: powershell
         env:
-          # The installed app talks to the backend you run locally (see GUIDE.md).
-          REACT_APP_BACKEND_URL: http://localhost:8001
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
           TIMESTAMP_URL: ${{ secrets.TIMESTAMP_URL }}
         run: .\desktop\build-windows.ps1

@@ -6,6 +6,19 @@ built. For the raw command reference see [COMMANDS.md](COMMANDS.md); for the pro
 
 ---
 
+## 0. Just want to use it?
+
+1. Download **`Point_x64-setup.exe`** from [Releases](../../releases/latest) and run it.
+2. Open **Point** from the Start menu → **Settings** → paste an API key for at least one AI
+   provider (OpenAI, Gemini, OpenRouter or Groq) → **Save keys**.
+3. Press **`Alt+Shift+S`** anywhere and ask about what's on your screen.
+
+That's it: the installer includes everything (backend, OCR, local history database). No Python,
+Docker or command line needed. The rest of this guide is for running Point from source and for
+the details.
+
+---
+
 ## 1. What Point is made of
 
 | Piece | Where | What it does | Works in |
@@ -13,8 +26,8 @@ built. For the raw command reference see [COMMANDS.md](COMMANDS.md); for the pro
 | **Desktop app** (Tauri/Rust) | `desktop/` | System-wide `Alt+Shift+S` snip overlay: freeze the screen, select, ask, answer in place | Any Windows app — VS Code, PDFs, video, remote desktops |
 | **Chrome extension** | `extension/` | Capture the current tab or full page into Point; Real-Time Lens for instant in-page answers | Chrome / Chromium browsers |
 | **Web workspace** (React) | `frontend/` | The full capture UI: all selection tools, OCR, multi-source, history, integrations | Browser at `localhost:3000`, and inside the desktop app |
-| **Backend** (FastAPI) | `backend/` | AI analysis (streaming), OCR, web search, history, Notion/GitHub integrations | Local, port `8001` |
-| **MongoDB + SearXNG** (Docker) | — | History storage; private web search for the Search action | Local, ports `27017` / `8888` |
+| **Backend** (FastAPI) | `backend/` | AI analysis (streaming), OCR, web search, history, Notion/GitHub integrations | Dev: port `8001`. Installed app: bundled, port `47811` |
+| **MongoDB + SearXNG** (Docker) | — | Dev only. History storage and private web search. The installed app uses SQLite and DuckDuckGo instead | Local, ports `27017` / `8888` |
 
 Everything runs locally. Your screenshots only leave the machine when they're sent to the AI
 provider you pick for a request.
@@ -57,9 +70,10 @@ running.
 
 ### Or install it
 
-Download the `.exe` (or `.msi`) from [Releases](../../releases/latest) and run it. Point then
-starts from the Start menu. You still need the backend from step 2 running, with
-`http://tauri.localhost` included in `CORS_ORIGINS` in `backend\.env`.
+See [§0](#0-just-want-to-use-it). The installed app runs its own copy of the backend in the
+background (on `127.0.0.1:47811`, so it never clashes with a dev backend on `8001`) and stops it
+when you close Point. Its data lives in `%LOCALAPPDATA%\com.spatialai.contextlayer\`:
+`point.db` (history) and `settings.json` (your API keys). Delete that folder to reset Point.
 
 ### Chrome extension
 
@@ -152,7 +166,8 @@ Available in both the snip overlay and the workspace:
 | **Compare** | Compare multiple regions or sources |
 
 **Models:** GPT-5.5, Gemini 3.1 Pro, OpenRouter, Groq. Only providers with a key set in
-`backend\.env` will work. Picking one without a key returns *"AI service is not configured"*.
+**Settings** (or `backend\.env` in dev) will work. Picking one without a key returns *"AI service
+is not configured"*.
 
 Copy, Rewrite, Translate and Transform results are shown verbatim. Everything else is rendered
 as formatted text.
@@ -168,7 +183,9 @@ as formatted text.
   hand-off to the full workspace.
 - Active-display and all-displays (stitched, mixed-DPI) capture in the workspace.
 - Native clipboard, and a hardware-validation probe (`desktop/validate-hardware.ps1`).
-- Signed NSIS `.exe` and `.msi` installers via `desktop/build-windows.ps1`.
+- Self-contained NSIS `.exe` and `.msi` installers via `desktop/build-windows.ps1`: the backend
+  is frozen with PyInstaller (`desktop/build-backend.ps1`) and ships with Tesseract, then runs as
+  a hidden background process. Code-signed when a certificate is configured.
 
 **Chrome extension (`extension/`)**
 - Visible-tab and full-page capture with page-context enrichment.
@@ -185,7 +202,9 @@ as formatted text.
 
 **Backend (`backend/`)**
 - Streaming analysis across GPT, Gemini, OpenRouter and Groq.
-- Tesseract OCR, SearXNG web search, MongoDB history.
+- Tesseract OCR. Web search via SearXNG, falling back to DuckDuckGo when SearXNG isn't running.
+- History in MongoDB (dev) or a local SQLite file (installed app).
+- API keys entered in **Settings** and stored on the user's machine, overriding `backend\.env`.
 - Notion and GitHub (REST API) integrations.
 
 **Repo and release**
@@ -204,10 +223,10 @@ as formatted text.
   SmartScreen shows "Windows protected your PC". Click **More info → Run anyway**. To sign, set
   the repo secrets `WINDOWS_CERT_BASE64` (the base64-encoded `.pfx`), `WINDOWS_CERT_PASSWORD` and
   `TIMESTAMP_URL`.
-- The installed app still needs the backend running locally on port 8001, and `CORS_ORIGINS` in
-  `backend\.env` must include `http://tauri.localhost` (the installed app's origin).
-- The installers' release build reads the UI from `frontend/build`. Run `yarn build` first if you
-  build outside the script.
+- Every user needs their own AI provider API key. There's no hosted Point account.
+- The installer is large (the backend runtime plus Tesseract), roughly 100+ MB.
+- Keys in `settings.json` are stored in plain text in the user's own profile folder, not in the
+  Windows Credential Manager.
 
 ---
 
@@ -219,8 +238,9 @@ as formatted text.
 | Snip shows Point's own window | Minimize the Point workspace window before snipping |
 | Desktop build: `link: extra operand` | You're in Git Bash. Use PowerShell. |
 | Desktop build: `link.exe not found` | Install Visual Studio C++ Build Tools |
-| "AI service is not configured" (503) | Add a key for that model's provider in `backend\.env` |
-| Search returns nothing | `docker start point-searxng` |
+| "AI service is not configured" (503) | Add a key for that model's provider in **Settings** (or `backend\.env` in dev) |
+| Installed app: "Settings could not be loaded" | The bundled backend didn't start. Close Point fully and reopen it. If another program uses port `47811`, free that port. |
+| Search returns nothing | Dev: `docker start point-searxng`. Otherwise Point falls back to DuckDuckGo, so check your internet connection. |
 | OCR returns empty text | Check that `TESSERACT_CMD` in `backend\.env` points to a real `tesseract.exe` |
 | Extension opens a tab but nothing loads | The frontend isn't on port 3000, or another app is using that port |
 | `docker start` fails with a pipe error | Docker Desktop isn't running. Start it first. |

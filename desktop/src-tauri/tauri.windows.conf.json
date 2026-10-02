@@ -1,7 +1,0 @@
-{
-  "bundle": {
-    "windows": {
-      "signCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File src-tauri/sign-artifact.ps1 %1"
-    }
-  }
-}

@@ -1,8 +1,16 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use image::{imageops, DynamicImage, ImageBuffer, ImageFormat, Rgba, RgbaImage};
 use serde::Serialize;
-use std::{env, fs, io::Cursor, path::Path, process, sync::Mutex, thread, time::Duration};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewWindow};
+use std::{
+    env, fs,
+    io::Cursor,
+    path::Path,
+    process::{self, Child, Command},
+    sync::Mutex,
+    thread,
+    time::Duration,
+};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, RunEvent, State, WebviewWindow};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use xcap::Monitor;
 
@@ -420,6 +428,47 @@ fn open_snip_in_point(app: AppHandle, capture: serde_json::Value) -> Result<(), 
         .map_err(|error| error.to_string())
 }
 
+/// The FastAPI backend frozen into the installer (see desktop/build-backend.ps1). Port matches the
+/// REACT_APP_BACKEND_URL baked into the release frontend build.
+const BUNDLED_BACKEND_PORT: u16 = 47811;
+
+#[derive(Default)]
+struct BackendProcess(Mutex<Option<Child>>);
+
+/// Start the bundled backend if this build ships one. Dev builds (`cargo run`) have no bundle and
+/// keep using the backend you run yourself on :8001.
+fn start_bundled_backend(app: &AppHandle) -> Result<Option<Child>, String> {
+    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
+    let exe = resources.join("point-backend").join("point-backend.exe");
+    if !exe.exists() {
+        return Ok(None);
+    }
+    let data_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| error.to_string())?;
+    fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
+    let mut command = Command::new(&exe);
+    command
+        .arg("--port")
+        .arg(BUNDLED_BACKEND_PORT.to_string())
+        .arg("--data-dir")
+        .arg(&data_dir)
+        .arg("--tesseract")
+        .arg(resources.join("tesseract").join("tesseract.exe"))
+        .current_dir(exe.parent().unwrap_or(&resources));
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+        .spawn()
+        .map(Some)
+        .map_err(|error| format!("could not start bundled backend: {error}"))
+}
+
 fn main() {
     let dpi_enabled = enable_per_monitor_v2();
     if let Some(index) = env::args().position(|argument| argument == "--hardware-report") {
@@ -441,6 +490,16 @@ fn main() {
     }
     tauri::Builder::default()
         .manage(SnipState::default())
+        .manage(BackendProcess::default())
+        // The hidden snip window would otherwise keep the app (and its backend) alive after the
+        // main window is closed, with no way left to quit.
+        .on_window_event(|window, event| {
+            if window.label() == "capture" {
+                if let tauri::WindowEvent::CloseRequested { .. } = event {
+                    window.app_handle().exit(0);
+                }
+            }
+        })
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -457,6 +516,10 @@ fn main() {
         .setup(|app| {
             let shortcut = Shortcut::new(Some(Modifiers::ALT | Modifiers::SHIFT), Code::KeyS);
             app.global_shortcut().register(shortcut)?;
+            match start_bundled_backend(app.handle()) {
+                Ok(child) => *app.state::<BackendProcess>().0.lock().unwrap() = child,
+                Err(error) => eprintln!("{error}"),
+            }
             Ok(())
         })
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -468,6 +531,13 @@ fn main() {
             close_snip,
             open_snip_in_point
         ])
-        .run(tauri::generate_context!())
-        .expect("Spatial AI desktop shell failed");
+        .build(tauri::generate_context!())
+        .expect("Spatial AI desktop shell failed")
+        .run(|app, event| {
+            if let RunEvent::Exit = event {
+                if let Some(mut child) = app.state::<BackendProcess>().0.lock().unwrap().take() {
+                    let _ = child.kill();
+                }
+            }
+        });
 }

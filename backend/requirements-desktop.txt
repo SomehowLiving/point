@@ -1,0 +1,14 @@
+# Runtime dependencies for the backend bundled in the desktop app (frozen by desktop/build-backend.ps1).
+# Deliberately minimal: no Mongo driver (SQLite is used), no PaddleOCR (Tesseract ships with the app).
+fastapi==0.110.1
+starlette==0.37.2
+uvicorn==0.25.0
+pydantic==2.13.4
+httpx==0.28.1
+openai==1.99.9
+google-genai==2.10.0
+pillow==12.3.0
+numpy==2.3.5
+pytesseract==0.3.13
+python-dotenv==1.2.2
+pyinstaller==6.16.0

@@ -1,6 +1,6 @@
 [package]
 name = "spatial-ai-context-layer"
-version = "0.1.0"
+version = "0.3.0"
 description = "Explicit-capture Windows shell for Spatial AI"
 edition = "2021"
 

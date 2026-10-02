@@ -9,7 +9,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, APIRouter, HTTPException, Query
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import StreamingResponse
-from motor.motor_asyncio import AsyncIOMotorClient
 import logging
 import base64
 import io
@@ -26,17 +25,17 @@ from ocr_service import extract_ocr
 from export_service import render_export
 from notion_service import NOTION_API_VERSION, build_notion_page_payload, parse_notion_page_id
 from github_service import GITHUB_API_VERSION, build_issue_payload, parse_github_repo
+import settings_store
+from storage import create_store
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# Capture history: MongoDB when MONGO_URL is set, else a local SQLite file (packaged app).
+store = create_store()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    client.close()
+    store.close()
 
 
 # Create the main app without a prefix
@@ -48,9 +47,9 @@ api_router = APIRouter(prefix="/api")
 
 SUPPORTED_MODELS = {
     "gpt-5.5": ("openai", os.environ.get("OPENAI_MODEL", "gpt-4o")),
-    "gemini-3.1-pro-preview": ("gemini", os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")),
+    "gemini-3.1-pro-preview": ("gemini", os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")),
     "openrouter": ("openrouter", os.environ.get("OPENROUTER_MODEL", "openai/gpt-4o-mini")),
-    "groq": ("groq", os.environ.get("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")),
+    "groq": ("groq", os.environ.get("GROQ_MODEL", "qwen/qwen3.8-27b")),
 }
 PROVIDER_KEY_ENV = {
     "openai": "OPENAI_API_KEY",
@@ -435,6 +434,53 @@ def extract_search_query(request: AnalyzeRequest) -> str:
     return " ".join(query.split())[:150]
 
 
+DDG_TITLE = re.compile(r'<a[^>]+class="result__a"[^>]+href="(?P<url>[^"]+)"[^>]*>(?P<title>.*?)</a>', re.S)
+DDG_SNIPPET = re.compile(r'class="result__snippet"[^>]*>(?P<snippet>.*?)</a>', re.S)
+
+
+def parse_duckduckgo(html_text: str) -> List[Tuple[str, str, str]]:
+    """(url, title_html, snippet_html) per result; each snippet is looked up within its own result block."""
+    matches = list(DDG_TITLE.finditer(html_text))
+    parsed = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(html_text)
+        snippet = DDG_SNIPPET.search(html_text, match.end(), end)
+        parsed.append((match.group("url"), match.group("title"), snippet.group("snippet") if snippet else ""))
+    return parsed
+
+
+def _strip_tags(value: str) -> str:
+    import html as html_module
+    return " ".join(html_module.unescape(re.sub(r"<[^>]+>", "", value or "")).split())
+
+
+async def search_duckduckgo(query: str, max_results: int) -> List[dict]:
+    # Fallback for installs without a local SearXNG (the packaged app): DuckDuckGo's HTML endpoint.
+    from urllib.parse import parse_qs, unquote, urlparse
+    try:
+        async with httpx.AsyncClient(timeout=10, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Point"}) as http_client:
+            response = await http_client.post("https://html.duckduckgo.com/html/", data={"q": query})
+            response.raise_for_status()
+    except Exception as exc:
+        logger.warning("DuckDuckGo fallback search failed for query %r: %s", query, exc)
+        return []
+    results = []
+    for url, title, snippet in parse_duckduckgo(response.text):
+        if url.startswith("//duckduckgo.com/l/") or "uddg=" in url:
+            url = unquote(parse_qs(urlparse(url.replace("&amp;", "&")).query).get("uddg", [url])[0])
+        if not url.startswith("http"):
+            continue
+        results.append({
+            "title": _strip_tags(title)[:300],
+            "url": url,
+            "snippet": _strip_tags(snippet)[:500],
+            "engine": "duckduckgo",
+        })
+        if len(results) >= max_results:
+            break
+    return results
+
+
 async def search_web(query: str, max_results: int = 6) -> List[dict]:
     if not query:
         return []
@@ -444,8 +490,8 @@ async def search_web(query: str, max_results: int = 6) -> List[dict]:
             response.raise_for_status()
             payload = response.json()
     except Exception as exc:
-        logger.warning("SearXNG search failed for query %r: %s", query, exc)
-        return []
+        logger.info("SearXNG unavailable (%s); falling back to DuckDuckGo", exc)
+        return await search_duckduckgo(query, max_results)
     results = []
     for item in payload.get("results", [])[:max_results]:
         engines = item.get("engines") or ([item["engine"]] if item.get("engine") else [])
@@ -518,7 +564,7 @@ async def send_to_notion(request: NotionSendRequest):
     parent_page_id = parse_notion_page_id(request.parent_page)
     if not parent_page_id:
         raise HTTPException(status_code=400, detail="Could not find a Notion page ID in that URL")
-    api_key = os.environ.get("NOTION_API_KEY")
+    api_key = settings_store.get_secret("NOTION_API_KEY")
     if not api_key:
         raise HTTPException(status_code=503, detail="Notion integration is not configured (missing NOTION_API_KEY)")
     payload = build_notion_page_payload(parent_page_id, request.title, request.content, request.source_url)
@@ -551,7 +597,7 @@ async def create_github_issue(request: GitHubCreateIssueRequest):
     if not repo:
         raise HTTPException(status_code=400, detail="Could not find an owner/repo in that value")
     owner, repo_name = repo
-    token = os.environ.get("GITHUB_PAT_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    token = settings_store.get_secret("GITHUB_PAT_TOKEN", "GITHUB_TOKEN")
     if not token:
         raise HTTPException(status_code=503, detail="GitHub integration is not configured (missing GITHUB_PAT_TOKEN)")
     payload = build_issue_payload(request.title, request.content, request.source_url, request.labels or None)
@@ -620,9 +666,9 @@ async def stream_gemini_deltas(model_name: str, api_key: str, prompt: str, image
 async def analyze_capture(request: AnalyzeRequest):
     raw_image = parse_image_data(request.image_data)
     provider, model_name = SUPPORTED_MODELS[request.model]
-    api_key = os.environ.get(PROVIDER_KEY_ENV[provider])
+    api_key = settings_store.get_secret(PROVIDER_KEY_ENV[provider])
     if not api_key:
-        raise HTTPException(status_code=503, detail="AI service is not configured")
+        raise HTTPException(status_code=503, detail=f"AI service is not configured: add a {provider.title()} API key in Settings")
 
     image_payload = canonical_image_base64(raw_image)
     # Additional sources (README 5.5, cross-screen selection) ride along for this one analyze
@@ -668,7 +714,7 @@ async def analyze_capture(request: AnalyzeRequest):
                 "search_results": search_results,
             }
             if not request.private_mode:
-                await db.captures.insert_one(dict(capture_payload))
+                await store.insert(capture_payload)
             response_capture = Capture(**capture_payload).model_dump()
             yield f"data: {json.dumps({'type': 'done', 'capture': response_capture, 'saved': not request.private_mode})}\n\n"
         except Exception as exc:
@@ -684,21 +730,13 @@ async def analyze_capture(request: AnalyzeRequest):
 
 @api_router.get("/captures", response_model=List[Capture])
 async def list_captures(search: str = Query(default="", max_length=200), refresh: str = Query(default="", max_length=40)):
-    query = {}
-    if search.strip():
-        safe = re.escape(search.strip())
-        query = {"$or": [
-            {"instruction": {"$regex": safe, "$options": "i"}},
-            {"result": {"$regex": safe, "$options": "i"}},
-            {"source.window_title": {"$regex": safe, "$options": "i"}},
-        ]}
-    captures = await db.captures.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
+    captures = await store.list(search.strip())
     return [Capture(**capture) for capture in captures]
 
 
 @api_router.get("/captures/{capture_id}", response_model=Capture)
 async def get_capture(capture_id: str):
-    capture = await db.captures.find_one({"id": capture_id}, {"_id": 0})
+    capture = await store.get(capture_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
     return Capture(**capture)
@@ -706,10 +744,26 @@ async def get_capture(capture_id: str):
 
 @api_router.delete("/captures/{capture_id}")
 async def delete_capture(capture_id: str):
-    result = await db.captures.delete_one({"id": capture_id})
-    if not result.deleted_count:
+    if not await store.delete(capture_id):
         raise HTTPException(status_code=404, detail="Capture not found")
     return {"deleted": True, "id": capture_id}
+
+class SettingsUpdate(BaseModel):
+    keys: dict = Field(default_factory=dict)
+
+
+@api_router.get("/settings")
+async def get_settings():
+    return {"keys": settings_store.status()}
+
+
+@api_router.put("/settings")
+async def put_settings(request: SettingsUpdate):
+    try:
+        settings_store.update(request.keys)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"keys": settings_store.status()}
 
 # Include the router in the main app
 app.include_router(api_router)
