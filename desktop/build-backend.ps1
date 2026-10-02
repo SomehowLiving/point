@@ -5,7 +5,7 @@ $DesktopRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent $DesktopRoot
 $Backend = Join-Path $RepoRoot "backend"
 $Resources = Join-Path $DesktopRoot "src-tauri\resources"
-$Work = Join-Path $env:TEMP "point-backend-build"
+$Work = Join-Path $DesktopRoot ".build-backend"  # same drive as the sources: PyInstaller can't relativize across drives
 
 $python = if ($env:POINT_PYTHON) { $env:POINT_PYTHON } else { "python" }
 $venv = Join-Path $Work "venv"

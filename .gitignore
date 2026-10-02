@@ -101,3 +101,4 @@ test_result.md
 
 # Frozen backend + Tesseract produced by desktop/build-backend.ps1
 desktop/src-tauri/resources/
+desktop/.build-backend/
