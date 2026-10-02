@@ -62,3 +62,22 @@ Write-Host "Bundled Tesseract reads PNG, JPEG and WEBP" -ForegroundColor Green
 
 $size = (Get-ChildItem -Recurse $Resources | Measure-Object Length -Sum).Sum / 1MB
 Write-Host ("Bundled backend + Tesseract: {0:N0} MB in {1}" -f $size, $Resources) -ForegroundColor Green
+
+# Smoke test the frozen backend the way the desktop app starts it (no console), so a backend that
+# crashes on startup can't be released.
+$probeData = Join-Path $Work "probe-data"
+Remove-Item -Recurse -Force $probeData -ErrorAction SilentlyContinue
+$exe = Join-Path $Resources "point-backend\point-backend.exe"
+$proc = Start-Process $exe -ArgumentList "--port 47899 --data-dir `"$probeData`" --tesseract `"$target\tesseract.exe`"" -PassThru -WindowStyle Hidden
+$ok = $false
+for ($i = 0; $i -lt 60 -and -not $proc.HasExited; $i++) {
+  Start-Sleep 1
+  try { $ok = (Invoke-RestMethod "http://127.0.0.1:47899/api/ocr/status" -TimeoutSec 2).engines[0].available; if ($ok) { break } } catch {}
+}
+if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+if (-not $ok) {
+  $log = Join-Path $probeData "backend.log"
+  if (Test-Path $log) { Get-Content $log | Write-Host }
+  throw "Frozen backend failed its startup smoke test"
+}
+Write-Host "Frozen backend starts and finds Tesseract" -ForegroundColor Green

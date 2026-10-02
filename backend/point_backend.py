@@ -19,6 +19,15 @@ def main() -> None:
 
     if args.data_dir:
         os.environ["POINT_DATA_DIR"] = args.data_dir
+    # Started by the desktop app with no console, so stdout/stderr are None (which breaks uvicorn's
+    # logging) and any crash would be invisible. Send both to a log file in the data folder.
+    from storage import data_dir
+    log_dir = data_dir()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    if sys.stdout is None or sys.stderr is None:
+        log = open(log_dir / "backend.log", "a", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stdout or log
+        sys.stderr = sys.stderr or log
     # The packaged app never uses Mongo, even if the machine happens to have MONGO_URL set.
     os.environ.pop("MONGO_URL", None)
     os.environ.setdefault(
@@ -40,4 +49,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException:
+        import traceback
+        try:
+            from storage import data_dir
+            with open(data_dir() / "backend.log", "a", encoding="utf-8") as handle:
+                traceback.print_exc(file=handle)
+        finally:
+            raise
