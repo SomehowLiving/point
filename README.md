@@ -37,3 +37,7 @@ No more screenshot, crop, upload, explain. Point lets you draw over any region o
 ## Full product spec
 
 See [docs/SPEC.md](docs/SPEC.md).
+
+## License
+
+[MIT](LICENSE)
