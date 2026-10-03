@@ -38,7 +38,7 @@ $uninstallKeys = @(
   "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
 )
 $product = Get-ItemProperty $uninstallKeys -ErrorAction SilentlyContinue |
-  Where-Object { $_.DisplayName -like "Spatial AI Context Layer*" } |
+  Where-Object { $_.DisplayName -like "Point*" } |
   Select-Object -First 1
 
 $executable = $null
@@ -48,7 +48,7 @@ if ($product.InstallLocation) {
 if (-not $executable) {
   $executable = Get-ChildItem -Path $env:ProgramFiles -Filter "spatial-ai-context-layer.exe" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
 }
-if (-not $executable) { throw "Installed Spatial AI executable could not be located." }
+if (-not $executable) { throw "Installed Point executable could not be located." }
 
 $executableSignature = Get-AuthenticodeSignature -FilePath $executable.FullName
 if ($executableSignature.Status -ne "Valid") { throw "Installed executable signature is invalid." }

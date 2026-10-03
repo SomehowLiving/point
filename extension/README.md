@@ -1,4 +1,4 @@
-# Spatial AI Chrome Extension Prototype
+# Point — Chrome extension
 
 1. Open `chrome://extensions`.
 2. Enable **Developer mode**.

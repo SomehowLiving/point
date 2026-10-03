@@ -532,7 +532,7 @@ fn main() {
             open_snip_in_point
         ])
         .build(tauri::generate_context!())
-        .expect("Spatial AI desktop shell failed")
+        .expect("Point desktop shell failed")
         .run(|app, event| {
             if let RunEvent::Exit = event {
                 if let Some(mut child) = app.state::<BackendProcess>().0.lock().unwrap().take() {

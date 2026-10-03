@@ -4,13 +4,13 @@
 
 Everything Point needs runs on your own machine: MongoDB and SearXNG in Docker, the backend and
 frontend natively (so PowerShell/Windows-only pieces like Tesseract and Tauri native capture work
-correctly), and the Chrome extension loaded unpacked. No cloud dependency, no Emergent.
+correctly), and the Chrome extension loaded unpacked. MongoDB and SearXNG are optional: without
+them the backend uses a local SQLite file and falls back to DuckDuckGo for search.
 
-**Known conflict on this machine:** port 3000 is currently used by an unrelated project. The
-Chrome extension's content script is hardcoded to `http://localhost:3000/*` (see
-`extension/manifest.json`), so the frontend **must** run on port 3000 for the extension's
-capture-to-dashboard handoff to work. Free up port 3000 before starting the frontend, or the
-extension flow (though not the plain web app) will break.
+**Port 3000 is required.** The Chrome extension's content script is hardcoded to
+`http://localhost:3000/*` (see `extension/manifest.json`), so the frontend must run on port 3000
+for the extension's capture-to-dashboard handoff to work. If another project is using port 3000,
+free it before starting the frontend; the plain web app works on any port, the extension doesn't.
 
 ---
 
@@ -30,12 +30,15 @@ yarn install
 winget install --id UB-Mannheim.TesseractOCR
 ```
 
-Then fill in `backend\.env` (already done on this machine) — see `backend\.env` for the exact
-keys expected: `MONGO_URL`, `DB_NAME`, `CORS_ORIGINS`, one or more of
-`OPENAI_API_KEY`/`GEMINI_API_KEY`/`OPENROUTER_API_KEY`/`GROQ_API_KEY` (only providers with a key
-set are usable — the UI lets you pick per request), `TESSERACT_CMD`, `SEARXNG_URL`, and
-optionally `NOTION_API_KEY` / `GITHUB_PAT_TOKEN` for the send-to-Notion / create-GitHub-issue
-integrations.
+Then create the env files from the templates and add at least one AI provider key:
+
+```powershell
+copy backend\.env.example backend\.env
+copy frontend\.env.example frontend\.env
+```
+
+`backend\.env.example` documents every setting. Only providers with a key set are usable; the UI
+lets you pick per request. You can also paste keys in the app's **Settings** page instead.
 
 ---
 
@@ -58,7 +61,7 @@ docker start point-mongo
 docker start point-searxng
 # First time only, if the container doesn't exist yet:
 # docker run -d --name point-searxng -p 8888:8080 `
-#   -v "C:\Users\nidhi\dev\point\backend\searxng:/etc/searxng" `
+#   -v "${PWD}\backend\searxng:/etc/searxng" `   # run from the repo root
 #   -e BASE_URL=http://localhost:8888/ `
 #   searxng/searxng:latest
 ```

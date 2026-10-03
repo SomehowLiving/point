@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
 
 
 # Create the main app without a prefix
-app = FastAPI(title="Spatial AI Context Layer", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Point", version="0.3.1", lifespan=lifespan)
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
@@ -125,7 +125,7 @@ class OCRRequest(BaseModel):
 
 class ExportRequest(BaseModel):
     format: Literal["text", "markdown", "json", "csv", "html"]
-    title: str = Field(default="Spatial AI extraction", max_length=200)
+    title: str = Field(default="Point extraction", max_length=200)
     source: SourceContext = Field(default_factory=SourceContext)
     payload: dict
     clean: bool = False
@@ -408,7 +408,7 @@ def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] =
     )
 
     return (
-        "You are the Spatial AI Context Layer. Analyze the provided screenshot(s) and prioritize only the "
+        "You are Point, a screen-context assistant. Analyze the provided screenshot(s) and prioritize only the "
         "user-marked regions. Each entry in a source's points_normalized_to_image marks one exact location the "
         "user pointed at (not an area) — ground your answer specifically on what is at that coordinate. "
         "Redacted areas are intentionally unavailable and must never be inferred. "
@@ -506,7 +506,7 @@ async def search_web(query: str, max_results: int = 6) -> List[dict]:
 # Add your routes to the router instead of directly to app
 @api_router.get("/")
 async def root():
-    return {"message": "Spatial AI Context Layer API", "status": "ready"}
+    return {"message": "Point API", "status": "ready"}
 
 @api_router.get("/models")
 async def models():

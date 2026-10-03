@@ -1,4 +1,4 @@
-# Spatial AI Windows Desktop Package
+# Point — Windows desktop app
 
 This scaffold documents the native shell boundary for the Windows MVP.
 

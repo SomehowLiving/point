@@ -1,4 +1,4 @@
-# Point — Spatial AI Context Layer
+# Point
 
 Press a shortcut → select anything on screen → ask → get an answer or an action.
 

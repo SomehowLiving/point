@@ -12,7 +12,7 @@ if (-not $Signed) {
 # in src-tauri/src/main.rs), not the :8001 dev backend.
 $env:REACT_APP_BACKEND_URL = "http://127.0.0.1:47811"
 
-Write-Host "Building Spatial AI frontend..." -ForegroundColor Cyan
+Write-Host "Building the Point frontend..." -ForegroundColor Cyan
 yarn --cwd "$RepoRoot\frontend" install --frozen-lockfile
 if ($LASTEXITCODE) { throw "yarn install failed" }
 yarn --cwd "$RepoRoot\frontend" build

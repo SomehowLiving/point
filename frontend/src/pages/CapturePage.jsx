@@ -267,7 +267,7 @@ export default function CapturePage() {
   };
   const runAnalysis = async () => {
     if (!image) return toast.error("Add a screenshot first");
-    if (!command.trim()) return toast.error("Give Spatial AI an instruction");
+    if (!command.trim()) return toast.error("Give Point an instruction");
     setProcessing(true); setResult(""); setSearchResults([]); setResultAction(action);
     try {
       const groundingOcr = await ensureOcr();

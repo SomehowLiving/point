@@ -8,7 +8,7 @@ const formats = ["text", "markdown", "html", "json", "csv"];
 
 export const ExportBar = ({ payload, source }) => {
   const [clean, setClean] = useState(false);
-  const create = async (format) => renderExport({ format, title: "Spatial AI OCR export", source, payload, clean });
+  const create = async (format) => renderExport({ format, title: "Point OCR export", source, payload, clean });
   const notifyCleaned = (file) => {
     if (clean && file.cleaned_count > 0) toast.message(`Removed ${file.cleaned_count} likely boilerplate block${file.cleaned_count === 1 ? "" : "s"}`);
   };

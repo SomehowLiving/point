@@ -1,4 +1,4 @@
-# Spatial AI Context Layer
+# Point — Product Spec
 ## 1. Product Definition
 Spatial AI Context Layer is a system-wide interface that lets users point to, select, draw over, or capture anything visible on their screen and use it as structured context for AI.
 It works like a combination of:

@@ -52,12 +52,12 @@ async function findOurWorker() {
     for (const candidate of context.serviceWorkers()) {
       try {
         const name = await candidate.evaluate(() => chrome.runtime.getManifest().name);
-        if (name === "Spatial AI Context Layer") return candidate;
+        if (name === "Point") return candidate;
       } catch { /* worker may have been torn down mid-check; keep looking */ }
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error("Spatial AI Context Layer service worker never appeared");
+  throw new Error("Point service worker never appeared");
 }
 const worker = await findOurWorker();
 const results = [];

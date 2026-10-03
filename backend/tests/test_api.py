@@ -13,11 +13,13 @@ import pytest
 import requests
 from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
+from pathlib import Path
 
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL")
 if not BASE_URL:
-    load_dotenv("/app/frontend/.env")
+    # Fall back to the frontend's .env (same variable the web app uses), relative to this repo.
+    load_dotenv(Path(__file__).resolve().parents[2] / "frontend" / ".env")
     BASE_URL = os.environ.get("REACT_APP_BACKEND_URL")
 if not BASE_URL:
     pytest.skip("REACT_APP_BACKEND_URL is required", allow_module_level=True)
@@ -133,7 +135,7 @@ def test_root():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ready"
-    assert "Spatial AI" in data["message"]
+    assert "Point" in data["message"]
 
 
 def test_models():

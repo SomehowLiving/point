@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Spatial AI Context Layer",
+  "name": "Point",
   "version": "0.2.0",
-  "description": "Select visible web context and send it to Spatial AI.",
+  "description": "Select anything on a web page and ask AI about it.",
   "permissions": ["activeTab", "tabs", "storage", "scripting", "unlimitedStorage"],
   "host_permissions": ["<all_urls>"],
   "background": {"service_worker": "background.js"},
@@ -19,7 +19,7 @@
       "run_at": "document_idle"
     }
   ],
-  "action": {"default_title": "Capture with Spatial AI"},
+  "action": {"default_title": "Capture with Point"},
   "commands": {
     "capture-context": {
       "suggested_key": {"default": "Alt+Shift+S", "windows": "Alt+Shift+S"},
