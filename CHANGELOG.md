@@ -15,7 +15,8 @@ Point is now open source under the MIT license.
   from earlier versions carry over.
 - Self-contained installer: no Python, Docker or database needed. Enter your own AI provider key
   in Settings (OpenAI, Gemini, OpenRouter or Groq) and press **Alt+Shift+S**.
-- Snip overlay: freeze the screen, select a region or point, ask, and read the answer in place.
+- Snip overlay: freeze the screen, select with a **box** or **any freeform shape** (or click a
+  point), ask, and read the answer in place.
 
 **Project**
 - Added CONTRIBUTING.md, SECURITY.md (private vulnerability reporting), PRIVACY.md and
