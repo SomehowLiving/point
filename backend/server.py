@@ -398,6 +398,17 @@ def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] =
         if any_ocr
         else ""
     )
+    # A freeform (lasso) selection arrives as a "mask" annotation polygon plus a region equal to its
+    # bounding box; without this the model only sees raw coordinates and treats the whole box as selected.
+    any_mask = any(a.get("type") == "mask" for bundle in sources for a in bundle["annotations"])
+    mask_note = (
+        'Annotations of type "mask" are freeform selections: their points (normalized 0-1 to the image) trace '
+        "the outline the user drew, and each comes with a region equal to its bounding box. The selection is "
+        "the area INSIDE that outline, so focus on what the outline encloses and ignore the parts of the "
+        "bounding box outside it.\n"
+        if any_mask
+        else ""
+    )
     multi_source_note = (
         f'There are {len(sources)} sources in the "sources" array below, in the SAME ORDER as the images attached '
         "to this message (sources[0] is the first image, sources[1] is the second, and so on) — e.g. a browser "
@@ -413,6 +424,7 @@ def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] =
         "user pointed at (not an area) — ground your answer specifically on what is at that coordinate. "
         "Redacted areas are intentionally unavailable and must never be inferred. "
         f"{multi_source_note}"
+        f"{mask_note}"
         f"{dom_note}"
         f"{ocr_note}"
         f"Task mode: {request.action}. {action_guides[request.action]}\n\n"
