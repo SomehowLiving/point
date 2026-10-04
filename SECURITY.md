@@ -15,7 +15,7 @@ release notes unless you'd rather not be.
 
 ## How Point handles your data
 
-Useful context when assessing a report:
+The full policy is in [PRIVACY.md](PRIVACY.md). In short, useful context when assessing a report:
 
 - **Screenshots** are sent only to the AI provider you choose for a request, using your own API
   key. Point has no server of its own and no analytics or telemetry.

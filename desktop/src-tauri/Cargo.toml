@@ -1,6 +1,6 @@
 [package]
 name = "spatial-ai-context-layer"
-version = "0.3.1"
+version = "0.4.0"
 description = "Point: Windows desktop shell (snip overlay + bundled backend)"
 edition = "2021"
 

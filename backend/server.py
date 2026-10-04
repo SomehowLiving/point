@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
 
 
 # Create the main app without a prefix
-app = FastAPI(title="Point", version="0.3.1", lifespan=lifespan)
+app = FastAPI(title="Point", version="0.4.0", lifespan=lifespan)
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")

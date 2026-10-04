@@ -38,6 +38,11 @@ No more screenshot, crop, upload, explain. Point lets you draw over any region o
 
 See [docs/SPEC.md](docs/SPEC.md).
 
+## Privacy
+
+Point has no servers and no telemetry. Your screenshots go only to the AI provider you pick,
+with your own key. See [PRIVACY.md](PRIVACY.md).
+
 ## License
 
 [MIT](LICENSE)

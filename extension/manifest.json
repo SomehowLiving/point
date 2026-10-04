@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Point",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "Select anything on a web page and ask AI about it.",
   "permissions": ["activeTab", "tabs", "storage", "scripting", "unlimitedStorage"],
   "host_permissions": ["<all_urls>"],
