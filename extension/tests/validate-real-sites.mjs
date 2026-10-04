@@ -2,7 +2,6 @@ import { chromium } from "../../frontend/node_modules/playwright/index.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
 
 const extensionPath = path.resolve(process.argv[2] || path.join(process.cwd(), "extension"));
 const outputPath = path.resolve(process.argv[3] || path.join(process.cwd(), "extension", "validation-results.json"));
@@ -34,13 +33,13 @@ function findChromeExecutable() {
 const chromeExecutable = findChromeExecutable();
 const profilePath = path.join(os.tmpdir(), "spatial-extension-profile");
 fs.rmSync(profilePath, { recursive: true, force: true });
-const chrome = spawn(chromeExecutable, ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--disable-breakpad", "--disable-crash-reporter", `--user-data-dir=${profilePath}`, `--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`, "--remote-debugging-port=9223", "about:blank"], { stdio: "ignore" });
-let browser;
-for (let attempt = 0; attempt < 40; attempt += 1) {
-  try { browser = await chromium.connectOverCDP("http://127.0.0.1:9223"); break; } catch { await new Promise((resolve) => setTimeout(resolve, 250)); }
-}
-if (!browser) throw new Error("Chrome DevTools connection did not start");
-const context = browser.contexts()[0];
+// Launched through Playwright (rather than spawning Chrome and attaching over CDP) so the same code
+// works with real Chrome or, when it isn't installed, Playwright's bundled Chromium.
+const context = await chromium.launchPersistentContext(profilePath, {
+  executablePath: chromeExecutable,
+  headless: false,
+  args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", `--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
+});
 
 // Chrome ships several built-in component extensions (e.g. "Google Hangouts") that also register
 // service workers in a fresh profile — grabbing serviceWorkers()[0] blindly can pick one of those
@@ -183,7 +182,7 @@ let lensTest = { ok: false };
     // elsewhere in this session) so this test demonstrates genuine successful AI responses, not
     // just the error-relay path — the default-model behavior is covered by not setting this at
     // all in normal use.
-    await worker.evaluate(() => chrome.storage.local.set({ lensModel: "openrouter" }));
+    await worker.evaluate((model) => chrome.storage.local.set({ lensModel: model }), process.env.LENS_MODEL || "openrouter");
     await toggleLens(url);
     await page.waitForTimeout(500); // let the content script build the shadow-DOM overlay
     const viewport = page.viewportSize() || { width: 1280, height: 720 };
@@ -264,7 +263,7 @@ let lensTest = { ok: false };
       return { ocrStatus: grounding.ocrStatus, ocrTextLength: grounding.ocrText.length };
     }, url);
 
-    const isRealAnswer = (text) => Boolean(text) && text !== "Thinking…" && (QUOTA_ERROR_PATTERN.test(text) || !/analysis failed|extension was reloaded/i.test(text));
+    const isRealAnswer = (text) => Boolean(text) && text !== "Thinking…" && (QUOTA_ERROR_PATTERN.test(text) || !/analysis failed|extension was reloaded|^error\b|error code: \d{3}/i.test(text));
     lensTest = {
       ok: badgeControls.badgeVisible
         && badgeControls.modeButtons.includes("point") && badgeControls.modeButtons.includes("draw")
@@ -299,7 +298,7 @@ let lensTest = { ok: false };
 
 fs.writeFileSync(outputPath, JSON.stringify({ created_at: new Date().toISOString(), browser: "Google Chrome", sites: results, full_page_test: fullPageTest, lens_test: lensTest }, null, 2));
 await context.close();
-chrome.kill("SIGTERM");
+await context.close();
 const failures = results.filter((result) => !result.ok);
 console.log(JSON.stringify({ sites: results, full_page_test: fullPageTest, lens_test: lensTest }, null, 2));
 if (failures.length || !fullPageTest.ok || !lensTest.ok) process.exitCode = 1;

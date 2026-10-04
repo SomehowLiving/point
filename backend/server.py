@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Literal, Optional, Tuple
 import uuid
 from datetime import datetime, timezone
-from openai import AsyncOpenAI
+from openai import APIStatusError, AsyncOpenAI, RateLimitError
 from PIL import Image
 import httpx
 from ocr_service import extract_ocr
@@ -26,6 +26,7 @@ from export_service import render_export
 from notion_service import NOTION_API_VERSION, build_notion_page_payload, parse_notion_page_id
 from github_service import GITHUB_API_VERSION, build_issue_payload, parse_github_repo
 import settings_store
+from focus_service import build_focus_images
 from storage import create_store
 
 # Capture history: MongoDB when MONGO_URL is set, else a local SQLite file (packaged app).
@@ -324,6 +325,30 @@ def _selected_dom_elements(source_context: SourceContext, regions: List[Region],
     }
 
 
+# Page context from the browser extension can be large (up to 12k chars of page text, 80 links and
+# 300 DOM elements). The close-up images now show exactly what was selected, and the DOM elements
+# under the selection are passed separately (selected_dom_elements), so only a compact summary of
+# the rest of the page goes into the prompt. This also keeps Lens requests within small
+# per-request token limits (e.g. Groq's free tier).
+PAGE_CONTEXT_LIMITS = {"visible_text": 3000, "selected_text": 4000, "headings": 20, "links": 20}
+
+
+def compact_source(source_context: "SourceContext") -> dict:
+    source = source_context.model_dump()
+    page = dict(source.get("page_context") or {})
+    if not page:
+        return source
+    page.pop("dom_elements", None)
+    for key in ("visible_text", "selected_text"):
+        if isinstance(page.get(key), str):
+            page[key] = page[key][: PAGE_CONTEXT_LIMITS[key]]
+    for key in ("headings", "links"):
+        if isinstance(page.get(key), list):
+            page[key] = page[key][: PAGE_CONTEXT_LIMITS[key]]
+    source["page_context"] = page
+    return source
+
+
 def _source_bundle(
     index: int,
     label: str,
@@ -335,7 +360,7 @@ def _source_bundle(
 ) -> dict:
     return {
         "label": label or f"Source {index + 1}",
-        "source": source_context.model_dump(),
+        "source": compact_source(source_context),
         "regions_normalized_to_image": [region.model_dump() for region in regions],
         "annotations": [annotation.model_dump() for annotation in annotations],
         "points_normalized_to_image": [point.model_dump() for point in points],
@@ -344,7 +369,7 @@ def _source_bundle(
     }
 
 
-def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] = None) -> str:
+def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] = None, image_manifest: Optional[List[str]] = None) -> str:
     action_guides = {
         "copy": "Recover the requested text precisely, preserving layout. Return only copy-ready content.",
         "explain": "Explain the selected content clearly, grounding every claim in visible evidence.",
@@ -410,19 +435,33 @@ def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] =
         else ""
     )
     multi_source_note = (
-        f'There are {len(sources)} sources in the "sources" array below, in the SAME ORDER as the images attached '
-        "to this message (sources[0] is the first image, sources[1] is the second, and so on) — e.g. a browser "
-        "error, a terminal log line, and a dashboard status, captured separately. Reason across all of them "
+        f'There are {len(sources)} sources in the "sources" array below (sources[0] is the primary screenshot) '
+        "— e.g. a browser error, a terminal log line, and a dashboard status, captured separately. Reason across all of them "
         "together when the instruction calls for it, rather than only looking at the first one.\n"
         if len(sources) > 1
         else ""
+    )
+    # The attached images, in order. Close-ups show exactly what the user selected, so the model
+    # doesn't have to map coordinates to pixels (which many models do badly).
+    manifest = image_manifest or ["the screenshot"]
+    image_note = (
+        "Attached images, in this order:\n"
+        + "".join(f"  Image {i}: {description}\n" for i, description in enumerate(manifest, start=1))
+        + (
+            "Answer about what the CLOSE-UPS show: that is exactly what the user selected. Use the full screenshot "
+            "only for surrounding context, and never answer about some other, more prominent part of the screen "
+            "instead. Selection numbers match the region order in the context bundle.\n"
+            if any("close-up" in description for description in manifest)
+            else ""
+        )
     )
 
     return (
         "You are Point, a screen-context assistant. Analyze the provided screenshot(s) and prioritize only the "
         "user-marked regions. Each entry in a source's points_normalized_to_image marks one exact location the "
         "user pointed at (not an area) — ground your answer specifically on what is at that coordinate. "
-        "Redacted areas are intentionally unavailable and must never be inferred. "
+        "Redacted areas are intentionally unavailable and must never be inferred.\n"
+        f"{image_note}"
         f"{multi_source_note}"
         f"{mask_note}"
         f"{dom_note}"
@@ -640,18 +679,35 @@ SYSTEM_MESSAGE = "You are a precise multimodal assistant for visual screen conte
 
 
 async def stream_openai_deltas(model_name: str, api_key: str, prompt: str, images: List[Tuple[str, str]], base_url: Optional[str] = None):
-    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    # No silent retries: on a rate limit the SDK would otherwise sleep for the provider's
+    # Retry-After (40s+ on Groq's free tier) while the user stares at a spinner. Fail fast and say why.
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0)
     content = [{"type": "text", "text": prompt}]
     for mime_type, image_payload in images:
         content.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_payload}"}})
-    stream = await client.chat.completions.create(
-        model=model_name,
-        stream=True,
-        messages=[
-            {"role": "system", "content": SYSTEM_MESSAGE},
-            {"role": "user", "content": content},
-        ],
-    )
+    try:
+        stream = await client.chat.completions.create(
+            model=model_name,
+            stream=True,
+            messages=[
+                {"role": "system", "content": SYSTEM_MESSAGE},
+                {"role": "user", "content": content},
+            ],
+        )
+    except RateLimitError as exc:
+        wait = exc.response.headers.get("retry-after") if exc.response is not None else None
+        when = f"in about {int(float(wait))} seconds" if wait and wait.replace(".", "", 1).isdigit() else "shortly"
+        provider = "Groq" if base_url and "groq" in base_url else "OpenRouter" if base_url and "openrouter" in base_url else "OpenAI"
+        raise RuntimeError(f"{provider}'s rate limit for your API key was reached. Try again {when}, or switch to another model.") from exc
+    except APIStatusError as exc:
+        if exc.status_code != 413:
+            raise
+        provider = "Groq" if base_url and "groq" in base_url else "This provider"
+        raise RuntimeError(
+            f"{provider} rejected this request as too large for your plan's per-minute limit (Groq's free tier allows "
+            "7,000 input tokens a minute, and a request with screenshots can use most of that). Select a smaller area, "
+            "or switch to another model."
+        ) from exc
     async for chunk in stream:
         delta = chunk.choices[0].delta.content if chunk.choices else None
         if delta:
@@ -674,6 +730,44 @@ async def stream_gemini_deltas(model_name: str, api_key: str, prompt: str, image
             yield chunk.text
 
 
+# Groq's free tier allows 7,000 input tokens per minute, and every image costs ~1,300-1,800 tokens
+# regardless of its size, on top of ~1,500-3,000 for the text. More than 2 images is rejected
+# outright ("413 Request too large"), so Groq gets the overview plus the first close-up. The other
+# providers comfortably take more.
+MAX_IMAGES = {"groq": 2}
+DEFAULT_MAX_IMAGES = 10
+IMAGE_SIZES = {"groq": {"overview_max_side": 1024, "closeup_max_side": 1024}}
+
+
+def focus_images_for(request: AnalyzeRequest, raw_image: bytes, provider: str) -> Tuple[List[Tuple[str, str]], List[str]]:
+    """Per source: an overview with selections outlined, then close-ups of each selection.
+
+    Additional sources (README 5.5, cross-screen selection) ride along for this one analyze call
+    only: their images aren't persisted to capture history. Overviews come first, in source order,
+    so every source is represented even when the image budget runs out before all close-ups fit.
+    """
+    sources = [("Primary screenshot", raw_image, request.regions, request.annotations, request.points)]
+    for index, extra in enumerate(request.additional_sources, start=2):
+        label = f"Source {index} ({extra.label})" if extra.label else f"Source {index}"
+        sources.append((label, parse_image_data(extra.image_data), extra.regions, extra.annotations, extra.points))
+    budget = MAX_IMAGES.get(provider, DEFAULT_MAX_IMAGES) - len(sources)
+    overviews, closeups = [], []
+    for label, raw, regions, annotations, points in sources:
+        try:
+            overview, crops = build_focus_images(
+                raw, label,
+                [r.model_dump() for r in regions], [a.model_dump() for a in annotations], [p.model_dump() for p in points],
+                max_closeups=max(0, budget - len(closeups)),
+                **IMAGE_SIZES.get(provider, {}),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Image bytes could not be decoded") from exc
+        overviews.append(overview)
+        closeups.extend(crops)
+    ordered = overviews + closeups
+    return [("image/png", item.png_base64) for item in ordered], [item.description for item in ordered]
+
+
 @api_router.post("/captures/analyze")
 async def analyze_capture(request: AnalyzeRequest):
     raw_image = parse_image_data(request.image_data)
@@ -683,12 +777,7 @@ async def analyze_capture(request: AnalyzeRequest):
         raise HTTPException(status_code=503, detail=f"AI service is not configured: add a {provider.title()} API key in Settings")
 
     image_payload = canonical_image_base64(raw_image)
-    # Additional sources (README 5.5, cross-screen selection) ride along for this one analyze
-    # call only -- their full images aren't persisted to capture history, to avoid every saved
-    # capture growing by however many extra screenshots it was reasoned against.
-    images: List[Tuple[str, str]] = [("image/png", image_payload)]
-    for extra in request.additional_sources:
-        images.append(("image/png", canonical_image_base64(parse_image_data(extra.image_data))))
+    images, image_manifest = focus_images_for(request, raw_image, provider)
 
     async def event_stream():
         collected = []
@@ -697,7 +786,7 @@ async def analyze_capture(request: AnalyzeRequest):
             if request.action == "search":
                 search_results = await search_web(extract_search_query(request))
                 yield f"data: {json.dumps({'type': 'search_results', 'results': search_results})}\n\n"
-            prompt = build_prompt(request, search_results)
+            prompt = build_prompt(request, search_results, image_manifest)
             deltas = (
                 stream_openai_deltas(model_name, api_key, prompt, images, base_url=OPENAI_COMPATIBLE_BASE_URLS[provider])
                 if provider in OPENAI_COMPATIBLE_BASE_URLS
