@@ -281,7 +281,7 @@ export default function CapturePage() {
       }
       const completed = await analyzeCapture({ image_data:protectedImage, mime_type:mimeType, instruction:command.trim(), action, extract_schema:extractSchema, model, regions, annotations, points, private_mode:privateMode, source, ocr_text:groundingOcr?.text||"", additional_sources:additionalSourcesPayload }, (delta) => setResult((current) => current + delta), (results) => setSearchResults(results || []));
       toast.success(completed?.saved ? "Analysis saved to history" : "Private analysis complete");
-    } catch (error) { toast.error(error.message); } finally { setProcessing(false); }
+    } catch (error) { toast.error(error.message.replace(/^NO_CREDIT:\s*/, "")); } finally { setProcessing(false); }
   };
   const copyResult = async () => { await writeClipboard(result); toast.success("Result copied"); };
   const rememberNotionPage = (value) => { setNotionPage(value); localStorage.setItem("notionPage", value); };

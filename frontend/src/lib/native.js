@@ -81,3 +81,9 @@ export async function writeRichClipboard(html, plainText) {
     return writeClipboard(plainText);
   }
 }
+// Open an https link in the user's browser (the desktop webview doesn't follow target="_blank").
+export async function openExternal(url) {
+  if (!isNativeShell()) { window.open(url, "_blank", "noopener"); return; }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke("open_url", { url });
+}

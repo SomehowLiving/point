@@ -1,6 +1,6 @@
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
-export async function analyzeCapture(payload, onDelta, onSearchResults) {
+export async function analyzeCapture(payload, onDelta, onSearchResults, onHighlights) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 150000);
   const response = await fetch(`${API}/captures/analyze`, {
@@ -23,6 +23,7 @@ export async function analyzeCapture(payload, onDelta, onSearchResults) {
       const event = JSON.parse(line.slice(6));
       if (event.type === "delta") onDelta(event.content);
       if (event.type === "search_results") onSearchResults?.(event.results);
+      if (event.type === "highlights") onHighlights?.(event.highlights);
       if (event.type === "done") completed = event;
       if (event.type === "error") throw new Error(event.message);
   };
@@ -92,5 +93,19 @@ export async function getSettings() {
 export async function saveSettings(keys) {
   const response = await fetch(`${API}/settings`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keys }) });
   if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.detail || "Settings could not be saved"); }
+  return response.json();
+}
+
+// Which models the user has a key for, and which to use by default.
+export async function getModels() {
+  const response = await fetch(`${API}/models`, { cache: "no-store" });
+  if (!response.ok) throw new Error("Couldn't reach Point's backend.");
+  return response.json();
+}
+
+// Checks a key with the provider (a free, read-only call) without saving it.
+export async function testKey(provider, key) {
+  const response = await fetch(`${API}/settings/test-key`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, key }) });
+  if (!response.ok) return { ok: false, message: "That doesn't look like a valid key." };
   return response.json();
 }

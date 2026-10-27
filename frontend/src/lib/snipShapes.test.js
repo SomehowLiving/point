@@ -1,4 +1,4 @@
-import { isUsableShape, pathBounds, polygonPoints, simplifyPath } from "./snipShapes";
+import { isUsableShape, keepFoundMarkers, pathBounds, polygonPoints, simplifyPath } from "./snipShapes";
 
 const circle = (n) => Array.from({ length: n }, (_, i) => ({ x: 0.5 + 0.2 * Math.cos((2 * Math.PI * i) / n), y: 0.5 + 0.2 * Math.sin((2 * Math.PI * i) / n) }));
 
@@ -32,4 +32,13 @@ test("tiny or degenerate shapes are rejected", () => {
 
 test("polygon points serialize for SVG", () => {
   expect(polygonPoints([{ x: 0.1, y: 0.2 }, { x: 0.3, y: 0.4 }])).toBe("0.1,0.2 0.3,0.4");
+});
+
+test("point back keeps only markers whose highlight was found", () => {
+  expect(keepFoundMarkers("Click Save ⟦1⟧ not Delete ⟦2⟧.", [{ id: 1 }])).toBe("Click Save ⟦1⟧ not Delete .");
+});
+
+test("echoed reference lists are removed once highlights arrive", () => {
+  const text = 'Change the return line ⟦1⟧.\n\n⟦1⟧: "return total / len(nums)"';
+  expect(keepFoundMarkers(text, [{ id: 1 }])).toBe("Change the return line ⟦1⟧.");
 });

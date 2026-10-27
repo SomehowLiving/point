@@ -39,6 +39,12 @@ How those services handle your data is governed by their own privacy policies an
 with them, for example OpenAI's, Google's, OpenRouter's, Groq's, DuckDuckGo's, Notion's and
 GitHub's. Point sends nothing to any of them unless you take the action listed.
 
+**Free API tiers:** some providers treat free usage differently from paid usage. For example,
+Google's terms for the free tier of the Gemini API allow it to use your requests to improve its
+products, and the free tier has a daily cap on requests. If your screenshots are sensitive, use a
+paid key (or a provider whose terms you're comfortable with). Point uses whichever key you give
+it and can't change how the provider treats it.
+
 ## What Point never does
 
 - No telemetry, analytics, crash reporting or tracking of any kind.

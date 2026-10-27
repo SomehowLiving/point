@@ -1,8 +1,9 @@
 // Minimal markdown renderer for model output: headings, paragraphs, bullet/numbered lists,
 // fenced code, inline **bold**, *italic*, `code`, and [links](url). Builds React elements
-// directly (never innerHTML), so model output can't inject markup.
+// directly (never innerHTML), so model output can't inject markup. Point-back references
+// (⟦1⟧) become chips carrying data-ref, so the page can link them to on-screen highlights.
 
-const INLINE = /(\*\*([^*]+)\*\*|__([^_]+)__|`([^`]+)`|\*([^*\s][^*]*)\*|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\))/g;
+const INLINE = /(\*\*([^*]+)\*\*|__([^_]+)__|`([^`]+)`|\*([^*\s][^*]*)\*|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|⟦\s*(\d+)\s*⟧)/g;
 
 function inline(text, keyPrefix) {
   const out = [];
@@ -14,6 +15,7 @@ function inline(text, keyPrefix) {
     if (m[2] || m[3]) out.push(<strong key={key}>{inline(m[2] || m[3], key)}</strong>);
     else if (m[4]) out.push(<code key={key}>{m[4]}</code>);
     else if (m[5]) out.push(<em key={key}>{inline(m[5], key)}</em>);
+    else if (m[8]) out.push(<span key={key} className="ref-chip" data-ref={m[8]}>{m[8]}</span>);
     else out.push(<a key={key} href={m[7]} target="_blank" rel="noreferrer">{m[6]}</a>);
     last = m.index + m[0].length;
   }

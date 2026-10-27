@@ -36,3 +36,18 @@ export function isUsableShape(points, viewport, minPx = 10) {
 export function polygonPoints(points) {
   return points.map((p) => `${p.x},${p.y}`).join(" ");
 }
+
+// Point back: ⟦n⟧ markers in the answer refer to highlights the backend found on screen. Once the
+// highlights arrive, drop markers that couldn't be located so no chip points at nothing.
+// Models sometimes echo their reference list into the answer as lines like '⟦1⟧: "Save"'; the
+// highlight already shows that, so those lines are removed (mirrors clean_answer in point_back.py).
+const LEGEND_LINE = /^\s*(?:[-*]\s*)?(?:⟦\s*\d+\s*⟧|\[\d+\])\s*[:=\-–—].*$/gm;
+
+export function keepFoundMarkers(text, highlights) {
+  const found = new Set(highlights.map((h) => String(h.id)));
+  return text
+    .replace(LEGEND_LINE, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .replace(/⟦\s*(\d+)\s*⟧/g, (marker, id) => (found.has(id) ? marker : ""));
+}

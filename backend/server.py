@@ -10,6 +10,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Query
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import StreamingResponse
 import logging
+import asyncio
 import base64
 import io
 import json
@@ -27,6 +28,7 @@ from notion_service import NOTION_API_VERSION, build_notion_page_payload, parse_
 from github_service import GITHUB_API_VERSION, build_issue_payload, parse_github_repo
 import settings_store
 from focus_service import build_focus_images
+import point_back
 from storage import create_store
 
 # Capture history: MongoDB when MONGO_URL is set, else a local SQLite file (packaged app).
@@ -182,6 +184,13 @@ class AnalyzeRequest(BaseModel):
     points: List[Point] = Field(default_factory=list, max_length=12)
     source: SourceContext = Field(default_factory=SourceContext)
     private_mode: bool = False
+    # Point back: highlight the on-screen things the answer refers to (see point_back.py).
+    point_back: bool = False
+    # Run OCR on the selected regions server-side when the client didn't send ocr_text, so the
+    # screenshot is uploaded once and there is no separate OCR round trip before the question.
+    auto_ocr: bool = False
+    # Earlier turns of this conversation about the same capture (follow-up questions).
+    history: List[dict] = Field(default_factory=list, max_length=12)
     ocr_text: str = Field(default="", max_length=100000)
     # Capped at 3 (4 sources total with the primary) to keep combined request size and provider
     # payload limits reasonable -- the README's own cross-screen example names exactly 3 sources
@@ -369,6 +378,24 @@ def _source_bundle(
     }
 
 
+def _history_note(history: List[dict]) -> str:
+    """Earlier questions and answers about this same capture, so follow-ups ("and how do I fix
+    it?") make sense. Only the last 4 turns, each capped, to keep requests small."""
+    turns = []
+    for turn in history[-4:]:
+        question = str(turn.get("question", "")).strip()[:500]
+        answer = str(turn.get("answer", "")).strip()[:1500]
+        if question and answer:
+            turns.append(f"User: {question}\nYou answered: {answer}")
+    if not turns:
+        return ""
+    return (
+        "Earlier in this conversation, about the same screenshot and selection:\n"
+        + "\n\n".join(turns)
+        + "\n\nThe instruction below is a follow-up; answer it in that context.\n\n"
+    )
+
+
 def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] = None, image_manifest: Optional[List[str]] = None) -> str:
     action_guides = {
         "copy": "Recover the requested text precisely, preserving layout. Return only copy-ready content.",
@@ -376,7 +403,8 @@ def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] =
         "search": "Identify the selected subject. web_search_results below are REAL, retrieved results for an "
                    "automatically-extracted query — cite specific titles/URLs from them, note which look like "
                    "official sources, and say plainly if the results don't answer the question rather than guessing.",
-        "translate": "Translate the selected content while preserving headings, lists, tables, and tone.",
+        "translate": "Translate the selected content while preserving headings, lists, tables, and tone. Return only "
+                     "the translation — no preamble, no restating the instruction, no notes.",
         "summarize": "Summarize the selected content with key facts, decisions, and open questions.",
         "extract": _extract_action_guide(request.extract_schema),
         "compare": "Compare the numbered selected regions explicitly, listing similarities, differences, and a conclusion.",
@@ -448,9 +476,10 @@ def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] =
         "Attached images, in this order:\n"
         + "".join(f"  Image {i}: {description}\n" for i, description in enumerate(manifest, start=1))
         + (
-            "Answer about what the CLOSE-UPS show: that is exactly what the user selected. Use the full screenshot "
-            "only for surrounding context, and never answer about some other, more prominent part of the screen "
-            "instead. Selection numbers match the region order in the context bundle.\n"
+            "The CLOSE-UPS show exactly what the user selected: that is what the question is about, so never "
+            "answer about some other, more prominent part of the screen instead. Use the full screenshot for "
+            "context, and refer to other parts of it when the answer depends on them (e.g. the line of code "
+            "that causes a selected error). Selection numbers match the region order in the context bundle.\n"
             if any("close-up" in description for description in manifest)
             else ""
         )
@@ -467,6 +496,7 @@ def build_prompt(request: AnalyzeRequest, search_results: Optional[List[dict]] =
         f"{dom_note}"
         f"{ocr_note}"
         f"Task mode: {request.action}. {action_guides[request.action]}\n\n"
+        f"{_history_note(request.history)}"
         f"User instruction: {request.instruction}\n\n"
         f"Structured context bundle:\n{json.dumps(context, ensure_ascii=False)}"
     )
@@ -559,16 +589,79 @@ async def search_web(query: str, max_results: int = 6) -> List[dict]:
 async def root():
     return {"message": "Point API", "status": "ready"}
 
+MODEL_CATALOG = [
+    # Order = preference when picking a default: fast, capable vision models first.
+    {"id": "gpt-5.5", "name": "GPT-5.5", "provider": "openai", "label": "OpenAI"},
+    {"id": "gemini-3.1-pro-preview", "name": "Gemini", "provider": "gemini", "label": "Google Gemini"},
+    {"id": "groq", "name": "Groq", "provider": "groq", "label": "Groq"},
+    {"id": "openrouter", "name": "OpenRouter", "provider": "openrouter", "label": "OpenRouter"},
+]
+
+
 @api_router.get("/models")
 async def models():
-    return {
-        "models": [
-            {"id": "gpt-5.5", "name": "GPT-5.5", "provider": "OpenAI"},
-            {"id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro", "provider": "Google"},
-            {"id": "openrouter", "name": "OpenRouter", "provider": "OpenRouter"},
-            {"id": "groq", "name": "Groq", "provider": "Groq"},
-        ]
-    }
+    # "configured" lets the UI offer only models the user has a key for, so a request never fails
+    # with "AI service is not configured".
+    listed = [{**m, "configured": bool(settings_store.get_secret(PROVIDER_KEY_ENV[m["provider"]]))} for m in MODEL_CATALOG]
+    default = next((m["id"] for m in listed if m["configured"]), None)
+    return {"models": listed, "default": default}
+
+
+class KeyTestRequest(BaseModel):
+    provider: Literal["openai", "gemini", "openrouter", "groq"]
+    key: str = Field(min_length=8, max_length=400)
+
+
+def _model_for(provider: str) -> str:
+    """The provider-side model name Point will actually call for this provider."""
+    catalog_id = next(m["id"] for m in MODEL_CATALOG if m["provider"] == provider)
+    return SUPPORTED_MODELS[catalog_id][1]
+
+
+@api_router.post("/settings/test-key")
+async def test_key(request: KeyTestRequest):
+    """Check a key before saving it, by asking the model Point will use for a one-token reply.
+
+    Listing models would be free, but it passes for keys whose account has no credit or no access
+    to the model, which then fail on the user's first real question. One output token costs a
+    tiny fraction of a cent. Never stores anything.
+    """
+    key = request.key.strip()
+    model = _model_for(request.provider)
+    headers = {"User-Agent": "Point/0.4", "Content-Type": "application/json"}
+    if request.provider == "gemini":
+        # Gemini's free tier has no credit to run out of, but only ~20 requests a day per model, so
+        # don't spend one on the check: listing models is free and enough to validate the key.
+        try:
+            async with httpx.AsyncClient(timeout=30) as http_client:
+                listing = await http_client.get("https://generativelanguage.googleapis.com/v1beta/models", headers={"x-goog-api-key": key})
+        except httpx.HTTPError:
+            return {"ok": False, "message": "Couldn't reach Google. Check your internet connection and try again."}
+        if listing.status_code == 200:
+            return {"ok": True, "message": "Key works."}
+        return {"ok": False, "message": "That key was rejected. Check you copied the whole key."}
+    else:
+        base = OPENAI_COMPATIBLE_BASE_URLS[request.provider] or "https://api.openai.com/v1"
+        url = f"{base}/chat/completions"
+        headers["Authorization"] = f"Bearer {key}"
+        body = {"model": model, "messages": [{"role": "user", "content": "Reply with OK."}], "max_tokens": 1}
+    try:
+        async with httpx.AsyncClient(timeout=30) as http_client:
+            response = await http_client.post(url, headers=headers, json=body)
+    except httpx.HTTPError:
+        return {"ok": False, "message": "Couldn't reach the provider. Check your internet connection and try again."}
+    detail = response.text[:2000].lower()
+    if response.status_code == 200:
+        return {"ok": True, "message": "Key works."}
+    if response.status_code == 402 or any(m in detail for m in ("insufficient_quota", "no credits", "requires more credit", "billing")):
+        return {"ok": False, "message": "The key is valid, but the account has no credit left, so it can't answer questions. Add credit with the provider, or use another provider (Gemini's key is free)."}
+    if response.status_code in (401, 403) or "api_key_invalid" in detail or "invalid api key" in detail or "incorrect api key" in detail:
+        return {"ok": False, "message": "That key was rejected. Check you copied the whole key."}
+    if response.status_code == 429:
+        return {"ok": True, "message": "Key works. (The provider says you're at its rate limit right now, so the first answer may need a moment.)"}
+    if response.status_code == 404:
+        return {"ok": False, "message": f"The key works, but your account can't use the model Point needs ({model})."}
+    return {"ok": False, "message": f"The provider answered with an error ({response.status_code}). Try again shortly."}
 
 
 @api_router.post("/ocr/extract")
@@ -678,6 +771,11 @@ async def create_github_issue(request: GitHubCreateIssueRequest):
 SYSTEM_MESSAGE = "You are a precise multimodal assistant for visual screen context. Never reveal hidden or redacted content."
 
 
+def is_out_of_credit(error: Exception) -> bool:
+    text = str(error).lower()
+    return any(marker in text for marker in ("insufficient_quota", "no credits", "requires more credit", "billing", "exceeded your current quota"))
+
+
 async def stream_openai_deltas(model_name: str, api_key: str, prompt: str, images: List[Tuple[str, str]], base_url: Optional[str] = None):
     # No silent retries: on a rate limit the SDK would otherwise sleep for the provider's
     # Retry-After (40s+ on Groq's free tier) while the user stares at a spinner. Fail fast and say why.
@@ -695,11 +793,17 @@ async def stream_openai_deltas(model_name: str, api_key: str, prompt: str, image
             ],
         )
     except RateLimitError as exc:
+        provider = "Groq" if base_url and "groq" in base_url else "OpenRouter" if base_url and "openrouter" in base_url else "OpenAI"
+        # A 429 is either a real rate limit (wait and retry) or an empty account (retrying never helps).
+        if is_out_of_credit(exc):
+            raise RuntimeError(f"NO_CREDIT: Your {provider} account has no credit left, so it can't answer. Add credit with {provider}, or connect another provider.") from exc
         wait = exc.response.headers.get("retry-after") if exc.response is not None else None
         when = f"in about {int(float(wait))} seconds" if wait and wait.replace(".", "", 1).isdigit() else "shortly"
-        provider = "Groq" if base_url and "groq" in base_url else "OpenRouter" if base_url and "openrouter" in base_url else "OpenAI"
         raise RuntimeError(f"{provider}'s rate limit for your API key was reached. Try again {when}, or switch to another model.") from exc
     except APIStatusError as exc:
+        if exc.status_code == 402:
+            provider = "OpenRouter" if base_url and "openrouter" in base_url else "This provider"
+            raise RuntimeError(f"NO_CREDIT: Your {provider} account has no credit left, so it can't answer. Add credit, or connect another provider.") from exc
         if exc.status_code != 413:
             raise
         provider = "Groq" if base_url and "groq" in base_url else "This provider"
@@ -714,21 +818,99 @@ async def stream_openai_deltas(model_name: str, api_key: str, prompt: str, image
             yield delta
 
 
+def _gemini_thinking(model_name: str):
+    """Keep Gemini's thinking low: Point's questions are about what's visible on screen, and default
+    thinking made the first word arrive ~3x later (5.2s vs 1.8s measured on gemini-3.6-flash, and
+    far longer with Point's multi-image prompts)."""
+    from google.genai import types
+    if model_name.startswith("gemini-3"):
+        return types.ThinkingConfig(thinking_level="low")
+    if "flash" in model_name:
+        return types.ThinkingConfig(thinking_budget=0)
+    return None
+
+
+# Gemini's free tier counts requests per model, per day (only ~20 a day for gemini-3.6-flash), so
+# when one model's daily allowance is used up Point moves on to the next one on the same key.
+GEMINI_FALLBACKS = ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
+
+
+def _gemini_daily_quota_hit(error: Exception) -> bool:
+    text = str(error)
+    return ("RESOURCE_EXHAUSTED" in text or text.startswith("429") or " 429" in text) and ("PerDay" in text or "per day" in text)
+
+
+def _gemini_retry_after(error: Exception) -> str:
+    match = re.search(r"retry in (\d+)h", str(error))
+    return f"in about {match.group(1)} hours" if match else "tomorrow"
+
+
+def _friendly_gemini_error(error: Exception) -> Exception:
+    text = str(error)
+    if "RESOURCE_EXHAUSTED" in text or text.startswith("429") or " 429" in text:
+        return RuntimeError("Gemini's free-tier rate limit for your key was reached. Try again in a minute, or connect another provider.")
+    if "UNAVAILABLE" in text or text.startswith("503") or " 503" in text:
+        return RuntimeError("Google's Gemini servers are busy right now. Try again in a moment, or switch model.")
+    if "API_KEY_INVALID" in text or "PERMISSION_DENIED" in text or text.startswith("403"):
+        return RuntimeError("Gemini rejected your API key. Check it in Settings.")
+    return error
+
+
 async def stream_gemini_deltas(model_name: str, api_key: str, prompt: str, images: List[Tuple[str, str]]):
     from google import genai
     from google.genai import types
 
     client = genai.Client(api_key=api_key)
-    parts = [types.Part.from_bytes(data=base64.b64decode(image_payload), mime_type=mime_type) for mime_type, image_payload in images]
-    stream = await client.aio.models.generate_content_stream(
-        model=model_name,
-        contents=[*parts, prompt],
-        config=types.GenerateContentConfig(system_instruction=SYSTEM_MESSAGE),
-    )
-    async for chunk in stream:
-        if chunk.text:
-            yield chunk.text
+    contents = [*[types.Part.from_bytes(data=base64.b64decode(b), mime_type=m) for m, b in images], prompt]
 
+    async def open_stream(model: str):
+        """Start a stream and read its first chunk, so quota/overload errors (which Gemini raises
+        lazily, on first read) surface here where they can be retried or routed to another model."""
+        config = types.GenerateContentConfig(system_instruction=SYSTEM_MESSAGE, thinking_config=_gemini_thinking(model))
+        for attempt in (1, 2):
+            try:
+                stream = await client.aio.models.generate_content_stream(model=model, contents=contents, config=config)
+                iterator = stream.__aiter__()
+                try:
+                    first = await iterator.__anext__()
+                except StopAsyncIteration:
+                    first = None
+                return first, iterator
+            except Exception as exc:
+                overloaded = "UNAVAILABLE" in str(exc) or str(exc).startswith("503")
+                if attempt == 1 and overloaded:
+                    await asyncio.sleep(1.5)  # free tier is often briefly overloaded; one retry usually works
+                    continue
+                raise
+
+    candidates = [model_name] + [m for m in GEMINI_FALLBACKS if m != model_name]
+    last_quota_error = None
+    for model in candidates:
+        try:
+            first, iterator = await open_stream(model)
+        except Exception as exc:
+            if _gemini_daily_quota_hit(exc):
+                last_quota_error = exc
+                logger.info("Gemini daily free quota used up for %s; trying the next model", model)
+                continue
+            raise _friendly_gemini_error(exc) from exc
+        if first is not None and first.text:
+            yield first.text
+        if first is None:
+            return
+        async for chunk in iterator:
+            if chunk.text:
+                yield chunk.text
+        return
+    raise RuntimeError(
+        f"NO_CREDIT: Gemini's free daily limit is used up on this key (it resets {_gemini_retry_after(last_quota_error)}). "
+        "Enable billing on the key in Google AI Studio for more, or connect another provider."
+    )
+
+
+# Actions whose answers explain or point at things on screen; text-producing actions (copy,
+# translate, rewrite, transform, extract) return content, not references, so they don't point back.
+POINT_BACK_ACTIONS = {"ask", "explain", "summarize", "compare", "search"}
 
 # Groq's free tier allows 7,000 input tokens per minute, and every image costs ~1,300-1,800 tokens
 # regardless of its size, on top of ~1,500-3,000 for the text. More than 2 images is rejected
@@ -779,24 +961,58 @@ async def analyze_capture(request: AnalyzeRequest):
     image_payload = canonical_image_base64(raw_image)
     images, image_manifest = focus_images_for(request, raw_image, provider)
 
+    pointing = request.point_back and request.action in POINT_BACK_ACTIONS
+
     async def event_stream():
         collected = []
         search_results: List[dict] = []
+        # Full-screen OCR runs while the model answers: point back needs every word's position, not
+        # just the selected regions'.
+        ocr_task = asyncio.create_task(asyncio.to_thread(point_back.screen_words, raw_image)) if pointing else None
+        splitter = point_back.StreamSplitter()
         try:
+            # Before search: the search query is built from the selection's OCR text.
+            if request.auto_ocr and not request.ocr_text.strip() and request.regions:
+                try:
+                    region_ocr = await asyncio.to_thread(extract_ocr, raw_image, [r.model_dump() for r in request.regions], "tesseract", "eng")
+                    request.ocr_text = region_ocr.get("text", "")[:100000]
+                except Exception:
+                    logger.warning("Region OCR failed; continuing with the image only", exc_info=True)
             if request.action == "search":
                 search_results = await search_web(extract_search_query(request))
                 yield f"data: {json.dumps({'type': 'search_results', 'results': search_results})}\n\n"
             prompt = build_prompt(request, search_results, image_manifest)
+            if pointing:
+                prompt += point_back.INSTRUCTIONS
             deltas = (
                 stream_openai_deltas(model_name, api_key, prompt, images, base_url=OPENAI_COMPATIBLE_BASE_URLS[provider])
                 if provider in OPENAI_COMPATIBLE_BASE_URLS
                 else stream_gemini_deltas(model_name, api_key, prompt, images)
             )
             async for content in deltas:
-                collected.append(content)
-                yield f"data: {json.dumps({'type': 'delta', 'content': content})}\n\n"
+                visible = splitter.feed(content) if pointing else content
+                if visible:
+                    collected.append(visible)
+                    yield f"data: {json.dumps({'type': 'delta', 'content': visible})}\n\n"
+
+            highlights: List[dict] = []
+            if pointing:
+                rest, block = splitter.finish()
+                if rest:
+                    collected.append(rest)
+                    yield f"data: {json.dumps({'type': 'delta', 'content': rest})}\n\n"
+                try:
+                    ocr = await asyncio.wait_for(ocr_task, timeout=30)
+                except Exception:
+                    logger.warning("Point back: full-screen OCR failed", exc_info=True)
+                    ocr = None
+                region_dicts = [region.model_dump() for region in request.regions]
+                highlights = point_back.resolve(point_back.parse_block(block), ocr, region_dicts)
+                yield f"data: {json.dumps({'type': 'highlights', 'highlights': highlights})}\n\n"
 
             result = "".join(collected).strip()
+            if pointing:
+                result = point_back.strip_unmatched_markers(result, [h["id"] for h in highlights])
             capture_id = str(uuid.uuid4())
             now = datetime.now(timezone.utc).isoformat()
             capture_payload = {

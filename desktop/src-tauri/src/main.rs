@@ -410,6 +410,23 @@ fn close_snip(app: AppHandle, state: State<SnipState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Open a link (e.g. "get an API key") in the default browser; the webview won't follow
+/// target="_blank" links itself. Only plain https URLs are accepted.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    let valid = url.starts_with("https://")
+        && url.len() < 2048
+        && !url.chars().any(|c| c.is_whitespace() || c == '"' || c == '^' || c == '&' || c == '|');
+    if !valid {
+        return Err("Only simple https links can be opened".into());
+    }
+    #[cfg(target_os = "windows")]
+    let result = Command::new("explorer").arg(&url).spawn();
+    #[cfg(not(target_os = "windows"))]
+    let result = Command::new("xdg-open").arg(&url).spawn();
+    result.map(|_| ()).map_err(|error| error.to_string())
+}
+
 /// Hand a snip (with the user's selection) to the full Point workspace for the heavier tools.
 #[tauri::command]
 fn open_snip_in_point(app: AppHandle, capture: serde_json::Value) -> Result<(), String> {
@@ -529,7 +546,8 @@ fn main() {
             capture_all_monitors,
             get_snip_capture,
             close_snip,
-            open_snip_in_point
+            open_snip_in_point,
+            open_url
         ])
         .build(tauri::generate_context!())
         .expect("Point desktop shell failed")
